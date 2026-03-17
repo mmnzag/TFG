@@ -1,0 +1,17 @@
+{
+  "hash": "9fc6a2162dc248a498d431ac9adfd5e9",
+  "result": {
+    "engine": "knitr",
+    "markdown": "---\ntitle: \"fca\"\nformat: html\n---\n\n\n::: {.cell}\n\n```{.r .cell-code}\nlibrary(tidyverse)\nlibrary(fcaR)\nlibrary(tidytext)\nlibrary(hassediagrams)\n\nmatriz_fca <- readRDS(\"data/matriz_fca.rds\") \nmodelo_lda <- readRDS(\"data/modelo_lda.rds\") \ndata_texto <- readRDS(\"data/data_texto.rds\")\n```\n:::\n\n\n\n\n\n::: {.cell}\n\n```{.r .cell-code}\n# Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico)\ndf_gamma <- tidy(modelo_lda, matrix = \"gamma\")\n\n# Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario\n# Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data'\ndata_texto$id_numeric <- as.character(1:nrow(data_texto))\n\ndf_hilos_topics <- df_gamma |>\n  left_join(data_texto |> select(id_numeric, url), by = c(\"document\" = \"id_numeric\")) |>\n  group_by(url, topic) |>\n  summarise(gamma_promedio = mean(gamma), .groups = 'drop')\n\n# 3. Crear la matriz para el FCA (Hilos x Tópicos)\nmatriz_para_fca <- df_hilos_topics |>\n  pivot_wider(names_from = topic, values_from = gamma_promedio) |>\n  column_to_rownames(\"url\")\n\n# 4. Binarizar: Consideramos que un hilo \"trata\" de un tópico si su probabilidad media es > 0.1\n# (Puedes ajustar este 0.1 según veas los resultados)\nmatriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1\n\n# 5. Ahora el FCA será instantáneo\nfc <- FormalContext$new(matriz_booleana)\nfc$find_concepts()\nplot(fc$concepts)\n```\n:::\n\n\n\n\n::: {.cell}\n\n```{.r .cell-code}\n# fc_data <- FormalContext$new(matriz_fca)\n```\n:::\n\n\n\n\n::: {.cell}\n\n```{.r .cell-code}\n# fc_data$find_concepts()\n\n# fc_data$concepts\n```\n:::\n\n\n\n::: {.cell}\n\n```{.r .cell-code}\n# fc_data$find_implications()\n# \n# fc_data$implications\n```\n:::\n\n\n",
+    "supporting": [
+      "fca_files"
+    ],
+    "filters": [
+      "rmarkdown/pagebreak.lua"
+    ],
+    "includes": {},
+    "engineDependencies": {},
+    "preserve": {},
+    "postProcess": true
+  }
+}

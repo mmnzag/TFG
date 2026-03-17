@@ -1,0 +1,44 @@
+project:
+  type: book
+
+book:
+  title: "Título de tu TFG"
+  author: "Marta Muñoz Aguilar"
+  date: "2024-05-20"
+  chapters:
+    - index.qmd
+    - preprocesamiento.qmd
+    - sna.qmd
+    - sentimientos.qmd
+    - topic.qmd
+    - fca.qmd
+    - summary.qmd
+    - references.qmd
+
+bibliography: references.bib
+
+execute:
+  # 'freeze' evita que se re-ejecuten capítulos que no has tocado.
+  # Muy útil cuando la carga de datos de Reddit tarda mucho.
+  freeze: auto
+  warning: false
+  message: false
+
+format:
+  html:
+    theme: cosmo
+  pdf:
+    documentclass: scrreprt       # Clase recomendada para tesis europeas
+    papersize: a4
+    mainfont: "Times New Roman"   # O la que pida tu universidad
+    fontsize: 12pt
+    linestretch: 1.5              # Interlineado de 1.5 (estándar TFG)
+    geometry:
+      - top=2.5cm
+      - bottom=2.5cm
+      - left=3cm
+      - right=2.5cm
+    toc: true                     # Tabla de contenidos
+    toc-depth: 3
+    number-sections: true
+    colorlinks: true

@@ -1,0 +1,65 @@
+---
+title: "fca"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(fcaR)
+library(tidytext)
+library(hassediagrams)
+
+matriz_fca <- readRDS("data/matriz_fca.rds") 
+modelo_lda <- readRDS("data/modelo_lda.rds") 
+data_texto <- readRDS("data/data_texto.rds")
+```
+
+
+
+```{r}
+# Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico)
+df_gamma <- tidy(modelo_lda, matrix = "gamma")
+
+# Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario
+# Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data'
+data_texto$id_numeric <- as.character(1:nrow(data_texto))
+
+df_hilos_topics <- df_gamma |>
+  left_join(data_texto |> select(id_numeric, url), by = c("document" = "id_numeric")) |>
+  group_by(url, topic) |>
+  summarise(gamma_promedio = mean(gamma), .groups = 'drop')
+
+# 3. Crear la matriz para el FCA (Hilos x Tópicos)
+matriz_para_fca <- df_hilos_topics |>
+  pivot_wider(names_from = topic, values_from = gamma_promedio) |>
+  column_to_rownames("url")
+
+# 4. Binarizar: Consideramos que un hilo "trata" de un tópico si su probabilidad media es > 0.1
+# (Puedes ajustar este 0.1 según veas los resultados)
+matriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1
+
+# 5. Ahora el FCA será instantáneo
+fc <- FormalContext$new(matriz_booleana)
+fc$find_concepts()
+plot(fc$concepts)
+```
+
+
+```{r}
+# fc_data <- FormalContext$new(matriz_fca)
+```
+
+
+```{r}
+# fc_data$find_concepts()
+
+# fc_data$concepts
+```
+
+```{r}
+# fc_data$find_implications()
+# 
+# fc_data$implications
+
+```
+

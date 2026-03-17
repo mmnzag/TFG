@@ -1,0 +1,219 @@
+---
+title: "topic"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(topicmodels) #LDA
+library(ldatuning)
+library(tm)
+library(textstem)
+
+dtm_lda <- readRDS("data/dtm_lda.rds") 
+data_texto <- readRDS("data/data_texto.rds")
+```
+
+
+Para esta parte primero vamos a hacer un tuning para encontrar el valor óptimo de k, siendo este el número de temas
+```{r}
+# Ejecutamos la función que probará diferentes valores de K
+# Vamos a probar desde 2 hasta 15 tópicos.
+resultados_tuning <- FindTopicsNumber(
+  dtm_lda,
+  topics = seq(from = 2, to = 15, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 123),
+  mc.cores = 2
+)
+
+# Mostramos la tabla con los valores exactos
+print(resultados_tuning)
+
+# Generamos el gráfico para decidir visualmente
+FindTopicsNumber_plot(resultados_tuning)
+```
+
+Los siguietes médotos maximizan el número
+Griffiths2004: Se basa en la verosimilitud logarítmica. El valor máximo suele indicar el número ideal de temas.
+
+Deveaud2014: Mide la divergencia entre la distribución de palabras de los tópicos. Queremos que los temas sean lo más distintos posible (máxima divergencia).
+
+
+Minimizar:
+CaoJuan2009: Mide la similitud entre tópicos. Si es muy alta, los temas están solapados. Buscamos el valor mínimo para tener temas bien diferenciados.
+
+Arun2010: Se basa en la divergencia de Kullback-Leibler. Al igual que la anterior, buscamos el punto mínimo.
+
+```{r}
+# Aplicamos el modelo LDA. 
+# La 'k = 4' significa que le pedimos al algoritmo que busque 4 temas distintos.
+modelo_lda <- LDA(dtm_lda, k = 10, control = list(seed = 123))
+
+# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
+terminos_top <- terms(modelo_lda, 8)
+
+# cat("\n--- LOS 4 TEMAS PRINCIPALES DEL DEBATE ---\n")
+print(terminos_top)
+```
+
+
+
+Aquí podemos observar que muchas de las palabras de los temas no tienen valor como *just*, *will*, *can*, etc. Como no representan nada vamos a eliminarlas
+```{r}
+data("stop_words")
+extra_stops_words <- tribble(
+  ~word, ~lexicon,
+  "just", "custom",
+  "dont", "custom",
+  "can",  "custom",
+  "get",  "custom",
+  "will", "custom",
+  "like", "custom",
+  "also", "custom",
+  "even", "custom",
+  "now",  "custom",
+  "say",  "custom",
+  "going", "custom",
+  "031re", "custom" # Por si acaso sobrevive algún residuo
+)
+
+# 3. Combinamos ambas listas
+stop_words <- stop_words |>
+  bind_rows(extra_stops_words)
+
+```
+
+
+La función unnest_tokens es la piedra angular del análisis de texto en el ecosistema Tidytext de R. Su trabajo consiste en tomar una columna de texto "bruto" (frases o párrafos) y dividirla en unidades individuales llamadas tokens (que suelen ser palabras sueltas).
+
+Se observa que hay palabras que tienen el mismo significado, como *job* y *jobs*
+```{r}
+# Tokenizamos y filtramos
+clean_text_dtm <- data_texto |>
+  unnest_tokens(word, comment) |>
+  anti_join(stop_words, by = "word") |>
+  # Opcional: quitar palabras de menos de 3 caracteres (suelen ser ruido)
+  filter(nchar(word) > 2) |>
+  mutate(word = lemmatize_words(word))
+
+# Volvemos a agrupar si necesitas el texto por documento
+lda_data_final <- clean_text_dtm |>
+  group_by(comment_id) |>
+  summarise(texto_final = paste(word, collapse = " "))
+```
+
+
+Volvemos a repetir LDA
+```{r}
+corpus <- Corpus(VectorSource(lda_data_final$texto_final))
+
+dtm_lda <- DocumentTermMatrix(corpus)
+
+# Eliminar documentos vacíos (si algún comentario se quedó sin palabras tras quitar stopwords)
+row_totals <- apply(dtm_lda, 1, sum)
+dtm_lda <- dtm_lda[row_totals > 0, ]
+
+# Guardar para el análisis de tópicos
+saveRDS(dtm_lda, "data/dtm_lda.rds")
+```
+
+
+```{r}
+resultados_tuning <- FindTopicsNumber(
+  dtm_lda,
+  topics = seq(from = 2, to = 15, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 123),
+  mc.cores = 2
+)
+
+# Mostramos la tabla con los valores exactos
+resultados_tuning
+
+# Generamos el gráfico para decidir visualmente
+FindTopicsNumber_plot(resultados_tuning)
+```
+
+
+```{r}
+modelo_lda <- LDA(dtm_lda, k = 6, control = list(seed = 123))
+
+# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
+terminos_top <- terms(modelo_lda, 8)
+
+print(terminos_top)
+```
+
+
+```{r}
+saveRDS(modelo_lda, "data/modelo_lda.rds")
+```
+
+
+
+Ver qué palabras tiene más peso en los topics
+```{r}
+# Extraemos las probabilidades beta (palabra-tópico)
+top_terms <- tidy(modelo_lda, matrix = "beta") |>
+  group_by(topic) |>
+  slice_max(beta, n = 10) |> 
+  ungroup() |>
+  arrange(topic, -beta)
+
+# Graficamos
+top_terms |>
+  mutate(term = reorder_within(term, beta, topic)) |>
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  theme_minimal() +
+  labs(title = "Top 10 términos por Tópico",
+       x = "Probabilidad (Beta)",
+       y = NULL)
+```
+
+
+¿Cuál es el tema que más preocupa a los usuarios?
+```{r}
+# Extraemos las probabilidades gamma (documento-tópico)
+prevalencia <- tidy(modelo_lda, matrix = "gamma") %>%
+  group_by(topic) %>%
+  summarise(promedio_gamma = mean(gamma))
+
+ggplot(prevalencia, aes(x = factor(topic), y = promedio_gamma, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  theme_minimal() +
+  labs(title = "Prevalencia de Temas",
+       subtitle = "Peso relativo de cada tópico en el conjunto de comentarios",
+       x = "Tópico",
+       y = "Probabilidad media (Gamma)")
+```
+
+
+```{r}
+# red_semantica <- data_texto |>
+#   unnest_tokens(bigram, texto, token = "ngrams", n = 2) |>
+#   separate(bigram, c("word1", "word2"), sep = " ") |>
+#   filter(!word1 %in% stop_words$word, !word2 %in% stop_words$word) |>
+#   count(word1, word2, sort = TRUE) |>
+#   filter(n > 5) |>
+#   graph_from_data_frame()
+# 
+# # Detectamos comunidades (Louvain)
+# comun_sem <- cluster_louvain(as.undirected(red_semantica))
+# V(red_semantica)$community <- as.character(comun_sem$membership)
+# 
+# ggraph(red_semantica, layout = "fr") +
+#   geom_edge_link(aes(edge_alpha = n), show.legend = FALSE) +
+#   geom_node_point(aes(color = community), size = 4) +
+#   geom_node_text(aes(label = name), repel = TRUE) +
+#   theme_void() +
+#   labs(title = "Comunidades Semánticas (Temas)")
+```
+
+

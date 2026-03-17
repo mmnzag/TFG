@@ -1,0 +1,119 @@
+---
+title: "sna"
+format: html
+---
+
+```{r}
+library(igraph)
+library(tidytext)
+library(ggraph)
+
+data_sna <- readRDS("data/data_sna.rds") 
+```
+
+
+En primer lugar, se crea y grafica el grafo de interacciones.
+
+```{r}
+# Creamos el objeto igraph listo para analizar (centralidad, comunidades...)
+grafo_reddit <- graph_from_data_frame(data_sna, directed = TRUE)
+
+plot(grafo_reddit)
+```
+
+Como no se puede distinguir nada, vamos a limpiarlo de forma que sólo aparezcan los que tienes más de 15 interacciones, basándonos en el grado tanto de entrada como el de salida de cada usuario. 
+
+```{r}
+# Calculamos el grado de cada usuario en el grafo 
+V(grafo_reddit)$degree <- degree(grafo_reddit, mode = "all")
+
+# filtramos los que tienen más de 15 interacciones
+grafo_limpio <- induced_subgraph(grafo_reddit, vids = which(V(grafo_reddit)$degree > 15))
+
+# recalculamos el grado en el nuevo grafo limpio para usarlo en el dibujo
+V(grafo_limpio)$degree <- degree(grafo_limpio, mode = "all")
+
+# 4. Dibujamos el grafo optimizado
+set.seed(123) # Para que la forma del grafo sea siempre la misma al ejecutar
+layout <- create_layout(grafo_limpio, layout = "fr")
+ggraph(layout) + 
+  # aristas un poco transparentes
+  geom_edge_link(alpha = 0.2, color = "gray50", arrow = arrow(length = unit(1.5, 'mm'))) +
+  
+  # nodos con el tamaño y color dependiendo de sus conexiones
+  geom_node_point(aes(size = degree, color = degree), show.legend = TRUE) +
+  
+  # TRUCO ESTRELLA: Solo ponemos el nombre a los que tienen más de 2 interacciones
+  geom_node_text(aes(label = ifelse(degree > 1, name, name)),
+                 repel = TRUE, # repel evita que los textos se pisen entre sí
+                 size = 2,
+                 fontface = "bold",
+                 color = "black",
+                 bg.color = "white", 
+                 bg.r = 0.15) +
+  
+  scale_color_viridis_c(option = "plasma") + # Paleta de colores bonita
+  theme_graph() + 
+  labs(title = "Red de interacciones en Reddit",
+       subtitle = "Nodos filtrados (>1 conexión) y etiquetas en usuarios clave")
+```
+
+## Detección de comunidades 
+
+Para esta parte, se van a comparar 2 métodos: el algoritmo de louvain y el de Walktrap
+
+
+### Louvain
+
+```{r}
+comun_soc <- cluster_louvain(as.undirected(grafo_limpio)) # louvain trabaja con grafos no dirigidos
+V(grafo_limpio)$community <- as.character(comun_soc$membership)
+
+# Visualización
+ggraph(grafo_limpio, layout = "kk") +
+  geom_edge_fan(alpha = 0.2) +
+  geom_node_point(aes(color = community), size = 3) +
+  theme_void() +
+  # Personalizamos los títulos de la leyenda
+  labs(
+    title = "Comunidades de Usuarios (Interacción)",
+    subtitle = "Algoritmo Walktrap detectado en Reddit",
+    color = "Comunidad ID" # Título que aparecerá sobre la leyenda
+  ) +
+  
+  # Ajustes finos de la posición
+  theme(
+    legend.position = "right", 
+    legend.title = element_text(face = "bold", size = 10),
+    legend.text = element_text(size = 9),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+### Walktrap
+
+```{r}
+comun_soc <- cluster_walktrap(grafo_limpio) 
+V(grafo_limpio)$community <- as.character(comun_soc$membership)
+
+# Visualización
+ggraph(grafo_limpio, layout = "kk") +
+  geom_edge_fan(alpha = 0.2) +
+  geom_node_point(aes(color = community), size = 3) +
+  theme_void() +
+  # Personalizamos los títulos de la leyenda
+  labs(
+    title = "Comunidades de Usuarios (Interacción)",
+    subtitle = "Algoritmo Walktrap detectado en Reddit",
+    color = "Comunidad ID" # Título que aparecerá sobre la leyenda
+  ) +
+  
+  # Ajustes finos de la posición
+  theme(
+    legend.position = "right", 
+    legend.title = element_text(face = "bold", size = 10),
+    legend.text = element_text(size = 9),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+

@@ -1,0 +1,196 @@
+# Carga y preprocesamiento
+
+```{r}
+library(RedditExtractoR)
+library(tidyverse) 
+library(igraph) # sna y visualizacion
+library(ggraph) # visualizacion
+library(tm) # text mining 
+```
+
+## Carga de datos
+
+Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología
+```{r}
+archivo_datos <- "data/reddit_thread.rds"
+
+if (file.exists(archivo_datos)) {
+  # Si ya lo descargamos antes, lo cargamos del disco
+  hilos <- readRDS(archivo_datos)
+} else {
+  # Si no existe, intentamos descargarlo
+  hilos <- find_thread_urls(
+  keywords = "AI", 
+  subreddit = "technology", 
+  sort_by = "comments", 
+  period = "month"
+  )
+  saveRDS(hilos, "data/reddit_thread.rds")
+}
+
+head(hilos)
+
+```
+
+
+Ahora se elige los 5 hilos con más comentarios. 
+```{r}
+hilos_por_comentarios <- hilos[order(-hilos$comments), ]
+
+url_objetivo <- hilos_por_comentarios$url[1:5]
+
+```
+
+Se descargan los comentarios de los hilos y su contenido
+```{r}
+
+path_comment <- "data/reddit_comments.rds"
+
+if (file.exists(path_comment)) {
+  # Si ya lo tenemos, lo cargamos
+  message("Cargando contenido desde caché local...")
+  contenido <- readRDS(path_comment)
+  
+} else {
+  # Si no existe, descargamos con una pequeña pausa para evitar bloqueos
+  message("Descargando contenido de Reddit (esto puede tardar)...")
+  
+  # Intentamos la descarga
+  contenido <- get_thread_content(url_objetivo)
+  
+  # Guardamos inmediatamente para que no falle la próxima vez
+  saveRDS(contenido, path_comment)
+}
+comentarios <- contenido$comments
+datos_posts <- contenido$threads
+
+head(datos_posts)
+```
+
+Para hacer un análisis de texto (NLP) se usa la columna comment.
+```{r}
+head(comentarios$comment)
+```
+
+Para analizar redes sociales se usan la columna author
+```{r}
+head(comentarios$author)
+
+```
+
+Para ver sentimientos se analiza cómo cambia el texto en función de score (votos positivos/negativos).
+```{r}
+head(comentarios$score)
+```
+
+Se limpian los datos quitando los posts borrados y además, añadiremos una columna con el id del comentario padre de forma que si alguien responde al comentario "1", su id será "1_1"
+```{r}
+clean_data <- comentarios |>
+  filter(author != "[deleted]") |>
+  # recortamos el último guion bajo y su número
+  mutate(parent_id = if_else(str_detect(comment_id, "_"),
+                             str_remove(comment_id, "_[0-9]+$"),
+                             NA_character_) # Si no hay guion bajo ponemos NA (raíz)
+  )
+```
+
+## Preparación de datos
+Para ello, vamos a separar la preparación en dos partes: una para los textos y otra para las relaciones entre usuarios.
+
+### Redes Sociales
+Para esta parte, vamos a crear un dataset con los emisores y receptores usando las columnas *author*, *comment_id* y *parent_id*.
+Para ello, creamos un nuevo dataset que contiene el emisor (hijo) y el receptor (padre) que limpiamos posteriormente
+
+```{r}
+data_sna <- clean_data |>
+  select(author, comment_id, parent_id) |>
+  left_join(clean_data, by = c("parent_id" = "comment_id"), suffix = c("_emisor", "_receptor")) |>
+  select(from = author_emisor, to = author_receptor) |>
+  drop_na() |> # se quitan los hilos originales
+  filter(from != to) # se quitan autorespuestas
+
+```
+
+Guardamos para usar posteriormente
+```{r}
+saveRDS(data_sna, "data/data_sna.rds")
+```
+
+### Procesamiento de texto
+
+Primero, se limpia el texto usando expresiones regulares para eliminar todo lo que no sean caracteres
+```{r}
+# Limpieza previa con expresiones regulares para quitar basura de internet
+data_texto <- clean_data |>
+  mutate(texto = str_replace_all(comment, "[^[:alnum:][:space:][:punct:]]", ""))
+  # mutate(texto = str_replace_all(comment, "http[s]?://\\S+", "")) |> # Fuera URLs
+  # mutate(texto = str_replace_all(comment, "&amp;", "and")) |>         # Limpiar ampersands
+  # mutate(texto = str_replace_all(texto, "<.*?>", "")) |> # fuera etiquetas HTML coladas
+  # mutate(texto = str_replace_all(texto, "\\\\[0-9]{3}", "")) # fuera los \031
+
+```
+
+```{r}
+saveRDS(data_texto, "data/data_texto.rds")
+```
+
+
+
+```{r}
+# Creamos el Corpus de texto que usa el paquete 'tm'
+corpus <- VCorpus(VectorSource(data_texto$texto))
+
+# Proceso estándar de limpieza de texto
+corpus <- tm_map(corpus, content_transformer(tolower)) # Todo a minúsculas
+corpus <- tm_map(corpus, removePunctuation)            # Fuera signos de puntuación
+corpus <- tm_map(corpus, removeNumbers)                # Fuera números
+
+corpus <- tm_map(corpus, removeWords, stopwords("en")) # quitamos las stopwords inglesas
+corpus <- tm_map(corpus, stripWhitespace)              # quitamos espacios en blanco extra
+
+# Creamos la Matriz Documento-Término (DTM)
+# Filas = Comentarios, Columnas = Palabras, Celdas = Frecuencia
+dtm <- DocumentTermMatrix(corpus)
+
+# para reducir la dispersidad nos quedamos con las palabras que representen más de un 1% del texto
+dtm_reducida <- removeSparseTerms(dtm, 0.99) 
+```
+
+Una vez procesado el texto, se convierte a los formatos finales para cada parte
+
+#### Modelado de temas
+
+Se eliminan filas vacías 
+```{r}
+filas_con_palabras <- rowSums(as.matrix(dtm_reducida)) > 0
+dtm_lda <- dtm_reducida[filas_con_palabras, ]
+
+
+saveRDS(dtm_lda, "data/dtm_lda.rds")
+```
+
+
+#### Análisis de sentimientos
+
+Se usa un vector de textos limpios
+```{r}
+textos_sentimiento <- clean_data |>
+  # Limpieza LIGERA (Para Sentimientos)
+  mutate(texto_sentimiento = str_replace_all(comment, "http[s]?://\\S+", ""), # Quitar URLs
+         texto_sentimiento = str_replace_all(texto_sentimiento, "\\\\[0-9]{3}", ""), # Quitar basura octal \031
+         texto_sentimiento = str_squish(texto_sentimiento)) # Solo quitar espacios extra
+
+
+saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
+```
+
+
+#### Análisis formal de conceptos
+
+Se crea una matriz booleana, siendo 1 que aparece y 0 que no
+```{r}
+matriz_fca <- as.matrix(dtm_lda)
+matriz_fca[matriz_fca > 0] <- 1 # Convertimos cualquier frecuencia > 0 en un 1 booleano
+
+saveRDS(matriz_fca, "data/matriz_fca.rds")
+```
