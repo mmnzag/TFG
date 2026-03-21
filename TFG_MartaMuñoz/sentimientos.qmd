@@ -1,5 +1,5 @@
 ---
-title: "sentimientos"
+title: "Análisis de sentimientos"
 format: html
 ---
 
@@ -65,6 +65,12 @@ ggplot(data_con_sentimiento, aes(x = valencia, y = log1p(score))) +
        x = "Valencia (Netamente Positivo <-> Netamente Negativo)",
        y = "Popularidad (log Score)")
 ```
+
+```{r}
+saveRDS(data_con_sentimiento, "data/data_sentim.rds")
+```
+
+
 
 ```{r}
 # Agrupamos por título de hilo (usando la URL o título corto)

@@ -1,5 +1,5 @@
 ---
-title: "fca"
+title: "Análisis formal de Conceptos"
 format: html
 ---
 
@@ -12,36 +12,144 @@ library(hassediagrams)
 matriz_fca <- readRDS("data/matriz_fca.rds") 
 modelo_lda <- readRDS("data/modelo_lda.rds") 
 data_texto <- readRDS("data/data_texto.rds")
+data_sentim <- readRDS("data/data_sentim.rds")
+```
+
+
+```{r}
+matriz_probabilidades <- modelo_lda@gamma
+
+# Binarizamos: Si la probabilidad del tema es > 0.20, le asignamos un 1
+umbral_topico <- 0.20
+matriz_topicos_fca <- ifelse(matriz_probabilidades > umbral_topico, 1, 0)
+
+# Nombramos las columnas dinámicamente para evitar errores
+colnames(matriz_topicos_fca) <- paste0("Topico_", 1:ncol(matriz_topicos_fca))
+# ¡NUEVO! 1: Lo pasamos a data.frame para que funcione el join
+df_topicos_fca <- as.data.frame(matriz_topicos_fca)
+# ¡NUEVO! 2: Rescatamos el ID del documento (que el modelo guarda en los rownames)
+# df_topicos_fca$comment_id <- rownames(matriz_probabilidades)
+df_topicos_fca$comment_id <- lda_data_final$comment_id[row_totals > 0]
+```
+
+
+```{r}
+matriz_sentimientos_fca <- data.frame(
+  comment_id    = data_sentim$comment_id,
+  Sent_Positivo = ifelse(data_sentim$valencia > 0.5, 1, 0),
+  Sent_Negativo = ifelse(data_sentim$valencia < -0.5, 1, 0),
+  Sent_Neutro   = ifelse(data_sentim$valencia >= -0.5 & data_sentim$valencia  <= 0.5, 1, 0)
+)
+
+```
+
+
+
+
+```{r}
+datos_fca_completos <- inner_join(df_topicos_fca, matriz_sentimientos_fca, by = "comment_id")
+
+# 5. CREAR LA MATRIZ FORMAL PARA fcaR
+# Quitamos la columna 'comment_id' porque fcaR solo quiere números
+matriz_final <- as.matrix(datos_fca_completos 
+                          |> select(-comment_id))
+
+
+# (Opcional) Nombramos las filas para tenerlo ordenado
+rownames(matriz_fca) <- paste0("Doc_", 1:nrow(matriz_fca))
+
+# Guardamos el resultado final
+saveRDS(matriz_fca, "data/matriz_fca_final.rds")
 ```
 
 
 
 ```{r}
-# Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico)
-df_gamma <- tidy(modelo_lda, matrix = "gamma")
+fc <- FormalContext$new(matriz_final)
 
-# Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario
-# Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data'
-data_texto$id_numeric <- as.character(1:nrow(data_texto))
+# Calculamos y mostramos las reglas matemáticas
+fc$find_implications()
 
-df_hilos_topics <- df_gamma |>
-  left_join(data_texto |> select(id_numeric, url), by = c("document" = "id_numeric")) |>
-  group_by(url, topic) |>
-  summarise(gamma_promedio = mean(gamma), .groups = 'drop')
+cat("\n--- REGLAS LÓGICAS EXTRAÍDAS ---\n")
+fc$implications$print()
+```
+{Sent_Positivo, Sent_Negativo} -> {Todo lo demás}.
+¿Por qué te dice que si un comentario es Positivo y Negativo a la vez implica absolutamente todos los tópicos?
 
-# 3. Crear la matriz para el FCA (Hilos x Tópicos)
-matriz_para_fca <- df_hilos_topics |>
-  pivot_wider(names_from = topic, values_from = gamma_promedio) |>
-  column_to_rownames("url")
+Porque en lógica matemática, una premisa falsa implica cualquier cosa. Como binarizaste los sentimientos muy bien, no existe ni un solo comentario en tu base de datos que sea Positivo y Negativo al mismo tiempo. Al ser un escenario imposible (soporte cero), el algoritmo te escupe que implica el resto del universo.
+prueba matemática de que tu matriz de incidencia y tu codificación one-hot de los sentimientos están perfectas. Son mutuamente excluyentes.
 
-# 4. Binarizar: Consideramos que un hilo "trata" de un tópico si su probabilidad media es > 0.1
-# (Puedes ajustar este 0.1 según veas los resultados)
-matriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1
 
-# 5. Ahora el FCA será instantáneo
-fc <- FormalContext$new(matriz_booleana)
+
+```{r}
+fc$implications$support()
+```
+
+
+
+```{r}
 fc$find_concepts()
-plot(fc$concepts)
+
+fc$concepts
+
+
+
+
+cat("\n--- CONCEPTOS CON MÁS DE UN 5% DE SOPORTE ---\n")
+# Imprimimos solo esos conceptos fuertes
+fc$concepts[which(fc$concepts$support() > 0.05)]$print()
+```
+
+
+-----------------------------------------------
+
+
+```{r}
+# Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico)
+# df_gamma <- tidy(modelo_lda, matrix = "gamma")
+# 
+# # Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario
+# # Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data'
+# data_texto$id_numeric <- as.character(1:nrow(data_texto))
+# 
+# df_hilos_topics <- df_gamma |>
+#   left_join(data_texto |> select(id_numeric, url), by = c("document" = "id_numeric")) |>
+#   group_by(url, topic) |>
+#   summarise(gamma_promedio = mean(gamma), .groups = 'drop')
+# 
+# # 3. Crear la matriz para el FCA (Hilos x Tópicos)
+# matriz_para_fca <- df_hilos_topics |>
+#   pivot_wider(names_from = topic, values_from = gamma_promedio) |>
+#   column_to_rownames("url")
+# 
+# # 4. Binarizar: Consideramos que un hilo "trata" de un tópico si su probabilidad media es > 0.1
+# # (Puedes ajustar este 0.1 según veas los resultados)
+# matriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1
+# 
+# # 5. Ahora el FCA será instantáneo
+# fc <- FormalContext$new(matriz_booleana)
+# fc$find_concepts()
+# plot(fc$concepts)
+```
+
+
+
+```{r}
+# matriz_probabilidades <- modelo_lda@gamma
+# 
+# # 3. BINARIZAS LOS TÓPICOS para el FCA (Ej: Si la prob > 0.20, ponemos un 1)
+# matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0)
+# # Binarizamos igual que antes
+# matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0)
+# 
+# # Leemos cuántas columnas (tópicos) tiene tu modelo realmente
+# num_topicos <- ncol(matriz_topicos_fca)
+# 
+# # Asignamos los nombres de forma dinámica
+# colnames(matriz_topicos_fca) <- paste0("Topico_", 1:num_topicos)
+# 
+# # Comprobamos que ha funcionado echando un ojo a las primeras filas
+# head(matriz_topicos_fca)
 ```
 
 

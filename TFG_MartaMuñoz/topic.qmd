@@ -1,5 +1,5 @@
 ---
-title: "topic"
+title: "Modelado de temas"
 format: html
 ---
 
@@ -10,6 +10,7 @@ library(topicmodels) #LDA
 library(ldatuning)
 library(tm)
 library(textstem)
+library(widyr)
 
 dtm_lda <- readRDS("data/dtm_lda.rds") 
 data_texto <- readRDS("data/data_texto.rds")
@@ -193,6 +194,39 @@ ggplot(prevalencia, aes(x = factor(topic), y = promedio_gamma, fill = factor(top
        x = "Tópico",
        y = "Probabilidad media (Gamma)")
 ```
+
+Correlación de tópicos
+
+```{r}
+correlacion_topicos <- tidy(modelo_lda, matrix = "gamma") |>
+  pairwise_cor(item = topic, feature = document, value = gamma) |>
+  arrange(desc(correlation))
+
+# Mira las primeras filas
+head(correlacion_topicos)# Solo las relaciones con cierta fuerza
+```
+
+
+```{r}
+# Calculamos el impacto real ponderado
+impacto_real <- tidy(modelo_lda, matrix = "gamma") |>
+  # Unimos con los datos originales. Asegúrate de que 'comment_id' es tu ID.
+  inner_join(data_texto, by = c("document" = "comment_id")) |>
+  # Multiplicamos el score por la probabilidad del tópico en ese comentario
+  mutate(score_ponderado = gamma * score) |>
+  group_by(topic) |>
+  summarise(impacto_total = sum(score_ponderado, na.rm = TRUE))
+
+# Graficamos el resultado real
+ggplot(impacto_real, aes(x = factor(topic), y = impacto_total, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  theme_minimal() +
+  labs(title = "Impacto Social por Tópico (Score Ponderado)",
+       subtitle = "Suma de votos ajustada por la relevancia de cada tema",
+       x = "Tópico", 
+       y = "Votos Totales Ponderados")
+```
+
 
 
 ```{r}

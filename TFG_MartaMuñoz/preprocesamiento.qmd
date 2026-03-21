@@ -1,4 +1,8 @@
-# Carga y preprocesamiento
+---
+title: "Carga y preprocesamiento"
+format: html
+---
+
 
 ```{r}
 library(RedditExtractoR)
@@ -189,8 +193,8 @@ saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
 
 Se crea una matriz booleana, siendo 1 que aparece y 0 que no
 ```{r}
-matriz_fca <- as.matrix(dtm_lda)
-matriz_fca[matriz_fca > 0] <- 1 # Convertimos cualquier frecuencia > 0 en un 1 booleano
+# matriz_fca <- as.matrix(dtm_lda)
+#matriz_fca[matriz_fca > 0] <- 1 # Convertimos cualquier frecuencia > 0 en un 1 booleano
 
-saveRDS(matriz_fca, "data/matriz_fca.rds")
+#saveRDS(matriz_fca, "data/matriz_fca.rds")
 ```
