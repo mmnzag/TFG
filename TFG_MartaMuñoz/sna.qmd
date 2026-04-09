@@ -1,119 +1,432 @@
 ---
-title: "Análisis de Redes Sociales"
-format: html
+title: "Análisis de Redes Sociales (SNA)"
+subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+author: "Marta Muñoz Aguilar"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+    highlight-style: dracula
 ---
+
+Este cuaderno contiene el flujo de trabajo técnico para el análisis de la red de interacciones de Reddit. El objetivo es procesar los datos crudos, extraer métricas de centralidad basadas en la teoría de Newman y segmentar la red en comunidades estructurales.
+
+# Carga y preprocesamiento de datos
+Se carga el dataset y se realiza una limpieza en el grado de actividad
 
 ```{r}
 library(igraph)
 library(tidytext)
 library(ggraph)
+library(tidyverse)
+library(viridis)
+library(patchwork)
 
+
+# Carga del dataset preprocesado
 data_sna <- readRDS("data/data_sna.rds") 
 ```
 
+# Construcción y filtrado del grafo de interacción
 
-En primer lugar, se crea y grafica el grafo de interacciones.
+En primer lugar, se genera el objeto igraph dirgido con el fiin de conservar la jerarquía de interacción.
 
 ```{r}
-# Creamos el objeto igraph listo para analizar (centralidad, comunidades...)
 grafo_reddit <- graph_from_data_frame(data_sna, directed = TRUE)
 
 plot(grafo_reddit)
 ```
+No se distingue nada, por lo que se va a filtrar el número de nodos.
 
-Como no se puede distinguir nada, vamos a limpiarlo de forma que sólo aparezcan los que tienes más de 15 interacciones, basándonos en el grado tanto de entrada como el de salida de cada usuario. 
-
+Para ello, se ve la distribución de los grados. Una vez observada, se emplea el método del codo para elegir el valor óptimo.
 ```{r}
-# Calculamos el grado de cada usuario en el grafo 
+# Extraer los grados del grafo original (antes de filtrar)
 V(grafo_reddit)$degree <- degree(grafo_reddit, mode = "all")
+df_grados <- data.frame(grado = V(grafo_reddit)$degree)
 
-# filtramos los que tienen más de 15 interacciones
-grafo_limpio <- induced_subgraph(grafo_reddit, vids = which(V(grafo_reddit)$degree > 15))
+# Calcular estadísticos descriptivos
+mediana_grado <- median(df_grados$grado)
+media_grado   <- mean(df_grados$grado)
 
-# recalculamos el grado en el nuevo grafo limpio para usarlo en el dibujo
-V(grafo_limpio)$degree <- degree(grafo_limpio, mode = "all")
-
-# 4. Dibujamos el grafo optimizado
-set.seed(123) # Para que la forma del grafo sea siempre la misma al ejecutar
-layout <- create_layout(grafo_limpio, layout = "fr")
-ggraph(layout) + 
-  # aristas un poco transparentes
-  geom_edge_link(alpha = 0.2, color = "gray50", arrow = arrow(length = unit(1.5, 'mm'))) +
+# Visualizar con ggplot2
+ggplot(df_grados, aes(x = grado)) +
+  # Histograma con barras suavizadas
+  geom_histogram(aes(y = ..density..), bins = 50, fill = "steelblue", alpha = 0.7) +
+  geom_density(color = "darkblue", size = 1) +
   
-  # nodos con el tamaño y color dependiendo de sus conexiones
-  geom_node_point(aes(size = degree, color = degree), show.legend = TRUE) +
+  # Línea de la Mediana (Tu umbral actual)
+  geom_vline(aes(xintercept = mediana_grado, linetype = "Mediana"), color = "red", size = 1) +
   
-  # TRUCO ESTRELLA: Solo ponemos el nombre a los que tienen más de 2 interacciones
-  geom_node_text(aes(label = ifelse(degree > 1, name, name)),
-                 repel = TRUE, # repel evita que los textos se pisen entre sí
-                 size = 2,
-                 fontface = "bold",
-                 color = "black",
-                 bg.color = "white", 
-                 bg.r = 0.15) +
+  # Línea de la Media (Para comparar)
+  geom_vline(aes(xintercept = media_grado, linetype = "Media"), color = "orange", size = 1) +
   
-  scale_color_viridis_c(option = "plasma") + # Paleta de colores bonita
-  theme_graph() + 
-  labs(title = "Red de interacciones en Reddit",
-       subtitle = "Nodos filtrados (>1 conexión) y etiquetas en usuarios clave")
-```
-
-## Detección de comunidades 
-
-Para esta parte, se van a comparar 2 métodos: el algoritmo de louvain y el de Walktrap
-
-
-### Louvain
-
-```{r}
-comun_soc <- cluster_louvain(as.undirected(grafo_limpio)) # louvain trabaja con grafos no dirigidos
-V(grafo_limpio)$community <- as.character(comun_soc$membership)
-
-# Visualización
-ggraph(grafo_limpio, layout = "kk") +
-  geom_edge_fan(alpha = 0.2) +
-  geom_node_point(aes(color = community), size = 3) +
-  theme_void() +
-  # Personalizamos los títulos de la leyenda
+  # Configuración de escalas y etiquetas
+  scale_linetype_manual(name = "Estadísticos", values = c("Mediana" = "dashed", "Media" = "dotted")) +
+  scale_x_continuous(breaks = seq(0, max(df_grados$grado) + 10, by = 10)) +
+  theme_minimal() +
   labs(
-    title = "Comunidades de Usuarios (Interacción)",
-    subtitle = "Algoritmo Walktrap detectado en Reddit",
-    color = "Comunidad ID" # Título que aparecerá sobre la leyenda
-  ) +
-  
-  # Ajustes finos de la posición
-  theme(
-    legend.position = "right", 
-    legend.title = element_text(face = "bold", size = 10),
-    legend.text = element_text(size = 9),
-    plot.title = element_text(hjust = 0.5, face = "bold")
+    title = "Distribución de Grado de la Red de Reddit",
+    subtitle = paste("Mediana =", mediana_grado, "| Media =", round(media_grado, 2)),
+    x = "Grado (Número de conexiones)",
+    y = "Densidad / Frecuencia",
+    caption = "La línea roja representa el umbral de filtrado seleccionado"
   )
 ```
 
-### Walktrap
 
 ```{r}
-comun_soc <- cluster_walktrap(grafo_limpio) 
-V(grafo_limpio)$community <- as.character(comun_soc$membership)
+#| warning: false
+generate_subgraph <- function(umbral, grafo){
+  # filtrar los que tienen más de 13 interacciones
+  grafo_limpio <- induced_subgraph(grafo,
+                                   vids = which(V(grafo)$degree > umbral_actividad))
 
-# Visualización
-ggraph(grafo_limpio, layout = "kk") +
-  geom_edge_fan(alpha = 0.2) +
-  geom_node_point(aes(color = community), size = 3) +
-  theme_void() +
-  # Personalizamos los títulos de la leyenda
-  labs(
-    title = "Comunidades de Usuarios (Interacción)",
-    subtitle = "Algoritmo Walktrap detectado en Reddit",
-    color = "Comunidad ID" # Título que aparecerá sobre la leyenda
-  ) +
+  # recalcular el grado en el nuevo grafo limpio para usarlo en el dibujo
+  V(grafo_limpio)$degree <- degree(grafo_limpio, mode = "all")
+  grafo_limpio <- delete_vertices(grafo_limpio, which(degree(grafo_limpio) == 0))
   
-  # Ajustes finos de la posición
-  theme(
-    legend.position = "right", 
-    legend.title = element_text(face = "bold", size = 10),
-    legend.text = element_text(size = 9),
-    plot.title = element_text(hjust = 0.5, face = "bold")
-  )
+
+  return(grafo_limpio)
+}
+
+plot_graph <- function(seed = 123, grafo){
+  #  grafo optimizado
+  set.seed(seed) # Para que la forma del grafo sea siempre la misma al ejecutar
+  layout <- create_layout(grafo, layout = "fr")
+  ggraph(layout) + 
+    # aristas un poco transparentes
+    geom_edge_link(alpha = 0.2, color = "gray50", arrow = arrow(length = unit(1.5, 'mm'))) +
+    
+    # nodos con el tamaño y color dependiendo de sus conexiones
+    geom_node_point(aes(size = degree, color = degree), show.legend = TRUE) +
+    
+    # TRUCO ESTRELLA: Solo ponemos el nombre a los que tienen más de 2 interacciones
+    geom_node_text(aes(label = name),
+                   repel = TRUE, # repel evita que los textos se pisen entre sí
+                   size = 2,
+                   fontface = "bold",
+                   color = "black",
+                   bg.color = "white", 
+                   bg.r = 0.15) +
+    
+    scale_color_viridis_c(option = "plasma") + # Paleta de colores bonita
+    theme_graph() + 
+    labs(title = "Red de interacciones en Reddit",
+         subtitle = "Nodos filtrados")
+  
+}
+# Definición el umbral basado en el método del codo 
+umbral_actividad <- 13
+
+grafo_limpio <- generate_subgraph(umbral_actividad, grafo_reddit)
+plot_graph(grafo=grafo_limpio)
 ```
+
+<!-- Tras una primera iteración visual con el umbral de la mediana ($k=13$), se observó una excesiva densidad en el centro de la red que impedía la identificación de clústeres. Se procedió a aplicar un filtrado más restrictivo ($k=18$), centrando el estudio en el esqueleto estructural de la comunidad. Este proceso permitió una convergencia óptima de los algoritmos de disposición espacial (layout), facilitando la interpretación de las distancias geodésicas entre usuarios clave -->
+
+```{r}
+#| warning: false
+umbral_actividad <- 20
+
+grafo_limpio <- generate_subgraph(umbral_actividad, grafo_reddit)
+plot_graph(grafo=grafo_limpio)
+```
+
+
+# Métricas Globales de la Red
+
+Antes de segmentar la red en comunidades, evaluamos su estructura global para entender el nivel de cohesión e interacción general:
+
+```{r}
+metricas_globales <- data.frame(
+  Métrica = c("Densidad", "Reciprocidad", "Transitividad", "Distancia Media"),
+  Valor = c(
+    edge_density(grafo_limpio),
+    reciprocity(grafo_limpio),
+    transitivity(grafo_limpio, type="global"),
+    mean_distance(grafo_limpio, directed=TRUE)
+  )
+)
+
+metricas_globales
+# kable(metricas_globales, digits = 4, caption = "Caracterización Topológica Global")
+```
+## Centralidades
+Implementamos las métricas definidas en el marco teórico de la memoria. Estas métricas permiten identificar diferentes perfiles de influencia.
+```{r}
+# Implementación de fórmulas de centralidad
+V(grafo_limpio)$degree      <- degree(grafo_limpio, mode = "all")
+V(grafo_limpio)$betweenness <- betweenness(grafo_limpio, directed = TRUE)
+V(grafo_limpio)$closeness   <- closeness(grafo_limpio, mode = "all")
+V(grafo_limpio)$pagerank    <- page_rank(grafo_limpio)$vector
+V(grafo_limpio)$eigenvector <- eigen_centrality(grafo_limpio)$vector
+
+# Umbral para etiquetas dinámicas (Percentil 90 de Intermediación)
+umbral_puente <- quantile(V(grafo_limpio)$betweenness, 0.90)
+```
+
+
+# Detección de Comunidades y Visualización 
+
+Comparamos dos aproximaciones algorítmicas: Louvain (optimización de modularidad) y Walktrap (caminos aleatorios)
+```{r}
+# Definimos el umbral para las etiquetas (Top 10% de intermediación)
+umbral_puente <- quantile(V(grafo_limpio)$betweenness, 0.90)
+
+# Función optimizada para el TFG
+# plot_comunidades <- function(graph, algoritmo_obj, titulo) {
+#   # Asignamos la membresía al grafo
+#   V(graph)$community <- as.factor(algoritmo_obj$membership)
+# 
+#   ggraph(graph, layout = "stress") + # 'stress' suele ser más estable que 'fr' o 'kk'
+#     geom_edge_parallel(alpha = 0.05, color = "grey") +
+#     geom_node_point(aes(color = community, size = degree)) +
+#     # TRUCO: Solo mostramos etiquetas de nodos con alta intermediación (los puentes)
+#     geom_node_text(aes(label = ifelse(betweenness > 1, name, NA)),
+#                    repel = TRUE, size = 3, fontface = "italic") +
+#     scale_color_viridis_d(option = "turbo") +
+#     theme_graph(base_family = "sans") +
+#     labs(title = titulo,
+#          subtitle = paste("Nodos escalados por Grado | Etiquetas: Top 10% Intermediación"),
+#          caption = paste("Modularidad (Q):", round(modularity(algoritmo_obj), 4)),
+#          color = "Clúster",
+#          size = "Conexiones") +
+#     theme(legend.position = "bottom",
+#           plot.margin = margin(10, 10, 10, 10))
+# }
+
+plot_comunidades <- function(graph, algoritmo_obj, titulo) {
+  # Asegurar que la comunidad sea factor para colores discretos
+  V(graph)$community <- as.factor(algoritmo_obj$membership)
+  
+  ggraph(graph, layout = "stress") + 
+    geom_edge_parallel(alpha = 0.03, color = "grey70") + # Aristas más sutiles
+    geom_node_point(aes(color = community, size = degree), show.legend = TRUE) +
+    
+    # Etiquetas más pequeñas y solo las críticas
+    geom_node_text(aes(label = ifelse(betweenness >= umbral_puente, name, NA)),
+                   repel = TRUE, size = 2, fontface = "bold", family = "sans") +
+    
+    scale_color_viridis_d(option = "turbo") + 
+    theme_graph(base_family = "sans") +
+    
+    # Acortamos textos para ganar espacio horizontal
+    labs(title = titulo,
+         subtitle = paste("Q:", round(modularity(algoritmo_obj), 3)),
+         color = "Clúster",
+         size = "Grado") +
+    
+    # Ajustes de espaciado crítico
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      legend.text = element_text(size = 7),
+      legend.title = element_text(size = 8, face = "bold"),
+      plot.title = element_text(size = 12, hjust = 0.5),
+      plot.subtitle = element_text(size = 10, hjust = 0.5),
+      plot.margin = margin(20, 20, 20, 20) # Margen externo de cada gráfico
+    ) +
+    # Forzamos que la leyenda de los clústeres no sea una fila infinita
+    guides(color = guide_legend(ncol = 5, override.aes = list(size = 3)))
+}
+
+```
+
+
+## Louvain
+
+```{r}
+louvain <- cluster_louvain(as.undirected(grafo_limpio)) # louvain trabaja con grafos no dirigidos
+V(grafo_limpio)$community <- as.character(louvain$membership)
+
+```
+
+## Walktrap
+
+```{r}
+walktrap <- cluster_walktrap(grafo_limpio)
+V(grafo_limpio)$community <- as.character(walktrap$membership)
+```
+
+```{r}
+
+
+p1 <- plot_comunidades(grafo_limpio, louvain, "Algoritmo Louvain")
+p2 <- plot_comunidades(grafo_limpio, walktrap, "Algoritmo Walktrap")
+# Combinamos ambos en una sola imagen (1 fila, 2 columnas)
+p_comparativo <- p1 + p2 + plot_layout(guides = 'collect') & theme(legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_comparativo
+```
+
+```{r}
+# Comparación de métricas
+m_louvain <- modularity(cluster_louvain(as.undirected(grafo_limpio)))
+m_walktrap <- modularity(cluster_walktrap(grafo_limpio))
+
+cat("Modularidad Louvain:", m_louvain, "\n")
+cat("Modularidad Walktrap:", m_walktrap, "\n")
+```
+
+
+### Métricas
+
+
+
+#### Asortatividad
+```{r}
+# Asortatividad de grado: 
+# > 0: Red asortativa (ricos con ricos). 
+# < 0: Red disasortativa (hubs conectados a nodos pequeños).
+asort_grado <- assortativity_degree(grafo_limpio, directed = TRUE)
+
+# Asortatividad por comunidad (¿se mezclan los grupos?):
+asort_comun <- assortativity_nominal(grafo_limpio, as.integer(as.factor(V(grafo_limpio)$community)))
+
+cat("Asortatividad de Grado:", round(asort_grado, 4), "\n")
+cat("Asortatividad de Comunidad:", round(asort_comun, 4), "\n")
+```
+
+# Identificación de Roles Estructurales
+
+```{r}
+# Creamos el ranking comparativo
+ranking_centralidad <- data.frame(
+  Usuario = V(grafo_limpio)$name,
+  Grado = V(grafo_limpio)$degree,
+  Intermediacion = round(V(grafo_limpio)$betweenness, 2),
+  Cercania = round(V(grafo_limpio)$closeness, 5),
+  PageRank = round(V(grafo_limpio)$pagerank, 4)
+) |>
+  arrange(desc(Intermediacion)) |> # Ordenamos por la que suele ser más crítica
+  head(10)
+
+# Renderizado para Quarto/RMarkdown
+knitr::kable(ranking_centralidad, 
+             caption = "Comparativa de las 4 métricas de centralidad para los nodos principales")
+```
+
+```{r}
+df_metrics_long <- data.frame(
+  Grado = V(grafo_limpio)$degree,
+  Intermediacion = V(grafo_limpio)$betweenness,
+  Cercania = V(grafo_limpio)$closeness,
+  PageRank = V(grafo_limpio)$pagerank
+) |>
+  pivot_longer(cols = everything(), names_to = "Metrica", values_to = "Valor")
+
+# Histogramas de distribución
+ggplot(df_metrics_long, aes(x = Valor, fill = Metrica)) +
+  geom_histogram(bins = 30, show.legend = FALSE) +
+  facet_wrap(~Metrica, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distribución de Métricas de Centralidad",
+       subtitle = "Análisis de la estructura de influencia en la red")
+```
+
+```{r}
+# Dataframe para análisis estadístico
+df_analisis <- data.frame(
+  Nombre = V(grafo_limpio)$name,
+  Popularidad = V(grafo_limpio)$degree,
+  Control = V(grafo_limpio)$betweenness,
+  Alcanzabilidad = V(grafo_limpio)$closeness,
+  Prestigio = V(grafo_limpio)$pagerank
+)
+
+# Gráfico de dispersión para detectar anomalías estructurales
+ggplot(df_analisis, aes(x = Popularidad, y = Control)) +
+  geom_point(aes(size = Prestigio, color = Alcanzabilidad), alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  scale_color_viridis_c() +
+  theme_minimal() +
+  labs(title = "Correlación Popularidad vs. Control de Información",
+       x = "Grado (Popularidad)",
+       y = "Intermediación (Control)")
+```
+
+Interpretacion:
+Estructura de la Red: Si la Densidad es baja pero la Modularidad es alta ($Q > 0.6$), concluye que la red está fragmentada en nichos especializados (comunidades de Reddit muy cerradas).
+Identificación de "Gatekeepers": Busca usuarios con Intermediación alta y Grado bajo. En ingeniería de redes, estos son los "Gatekeepers". Si estos usuarios dejan de participar, las comunidades pierden contacto entre sí.
+Resiliencia: Comenta la Transitividad. Si es alta, significa que la red es robusta porque hay muchos "triángulos" de amigos (si un camino falla, hay otro).
+
+
+"Top Players" por categoría
+```{r}
+top_grado     <- df_analisis |> arrange(desc(Popularidad)) |> head(3) |> pull(Nombre)
+top_intermed  <- df_analisis |> arrange(desc(Control)) |> head(3) |> pull(Nombre)
+top_pagerank  <- df_analisis |> arrange(desc(Prestigio)) |> head(3) |> pull(Nombre)
+
+# Esto te da nombres concretos para comentar en el texto
+cat("Líderes de opinión (PageRank):", paste(top_pagerank, collapse = ", "), "\n")
+cat("Conectores de la red (Intermediación):", paste(top_intermed, collapse = ", "), "\n")
+```
+
+
+## Identificación de Roles en la Red
+
+En lugar de ver únicamente los usuarios con más interacciones, clasificamos su rol dentro de la comunidad basándonos en distintas métricas de centralidad.
+
+```{r}
+# Calculamos el grado de entrada y salida por separado para mayor detalle
+V(grafo_limpio)$out_degree <- degree(grafo_limpio, mode = "out")
+V(grafo_limpio)$in_degree <- degree(grafo_limpio, mode = "in")
+
+tabla_roles <- data.frame(
+  Usuario = V(grafo_limpio)$name,
+  Grado_Entrada = V(grafo_limpio)$in_degree,
+  Grado_Salida = V(grafo_limpio)$out_degree,
+  Intermediacion = round(V(grafo_limpio)$betweenness, 2),
+  PageRank = round(V(grafo_limpio)$pagerank, 5)
+) |>
+  mutate(
+    Rol = case_when(
+      Intermediacion > quantile(Intermediacion, 0.90) & Grado_Entrada < quantile(Grado_Entrada, 0.75) ~ "Broker (Conector)",
+      PageRank > quantile(PageRank, 0.90) ~ "Autoridad (Referencia)",
+      Grado_Salida > quantile(Grado_Salida, 0.90) ~ "Hub (Difusor activo)",
+      TRUE ~ "Usuario Regular"
+    )
+  )
+
+# Mostramos un resumen de cuántos usuarios hay por rol
+table(tabla_roles$Rol)
+
+# Mostramos los principales Brokers, Autoridades y Hubs
+knitr::kable(
+  tabla_roles |> filter(Rol %in% c("Broker (Conector)", "Autoridad (Referencia)", "Hub (Difusor activo)")) |> arrange(desc(PageRank)) |> head(15), 
+  caption = "Usuarios Destacados por su Rol en la Red"
+)
+```
+
+<!-- ## Visualización Interactiva -->
+
+<!-- Para explorar los nodos, sus roles y las comunidades en detalle, generamos un grafo interactivo usando `visNetwork`. Esto permite acercar, alejar y seleccionar usuarios específicos para ver sus conexiones. -->
+
+<!-- ```{r} -->
+<!-- #| eval: false -->
+<!-- # (Nota: eval: false por defecto para evitar que el archivo HTML pese demasiado al renderizar Quarto. Cambia a true si deseas incluirlo en el render final o ejecútalo en RStudio para explorarlo) -->
+<!-- library(visNetwork) -->
+
+<!-- # Preparamos los nodos -->
+<!-- nodes <- data.frame( -->
+<!--   id = V(grafo_limpio)$name,  -->
+<!--   label = V(grafo_limpio)$name,  -->
+<!--   group = V(grafo_limpio)$community,  -->
+<!--   value = V(grafo_limpio)$degree, -->
+<!--   title = paste0("Usuario: ", V(grafo_limpio)$name, "<br>Grado: ", V(grafo_limpio)$degree, "<br>Comunidad: ", V(grafo_limpio)$community) -->
+<!-- ) -->
+
+<!-- # Preparamos las aristas -->
+<!-- edges <- as_data_frame(grafo_limpio, what = "edges") -->
+
+<!-- # Generamos la red interactiva -->
+<!-- visNetwork(nodes, edges, main = "Red de Interacciones en Reddit interactiva") |> -->
+<!--   visOptions(highlightNearest = list(enabled = TRUE, degree = 1), nodesIdSelection = TRUE) |> -->
+<!--   visLayout(randomSeed = 123) |> -->
+<!--   visPhysics(solver = "forceAtlas2Based", forceAtlas2Based = list(gravitationalConstant = -50)) -->
+<!-- ``` -->
 

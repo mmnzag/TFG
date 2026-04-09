@@ -1,9 +1,53 @@
-# Preface {.unnumbered}
+# Introducción {.unnumbered}
 
-This is a Quarto book.
+Bienvenidos a la memoria de este Trabajo de Fin de Grado.
 
-To learn more about Quarto books visit <https://quarto.org/docs/books>.
+El objetivo principal de este proyecto es analizar las dinámicas sociales, el sentimiento y los temas subyacentes en los debates sobre Inteligencia Artificial (IA) en la plataforma Reddit, específicamente en comunidades enfocadas en tecnología.
+
+Para ello, utilizamos una combinación de técnicas analíticas:
+
+1. **Minería de Textos y Preprocesamiento**: Para limpiar y preparar los datos no estructurados extraídos de los comentarios.
+2. **Análisis de Redes Sociales (SNA)**: Para comprender cómo interactúan los usuarios entre sí [@wasserman1994social].
+3. **Análisis de Sentimientos**: Para evaluar la polaridad emocional y las reacciones asociadas a la IA [@mohammad2013crowdsourcing].
+4. **Modelado de Temas (Topic Modeling)**: Implementando algoritmos como Latent Dirichlet Allocation (LDA) [@blei2003latent] para descubrir los tópicos latentes en la discusión.
+5. **Análisis Formal de Conceptos (FCA)**: Para encontrar relaciones jerárquicas y dependencias entre los conceptos y sentimientos [@ganter1999formal].
+
+## Resumen de los Datos
+
+A continuación, se presenta un resumen de los datos recolectados, que servirán como base para los análisis posteriores en los siguientes capítulos.
 
 ```{r}
-1 + 1
+#| label: resumen-datos
+#| echo: false
+#| message: false
+#| warning: false
+
+library(dplyr)
+library(DT) # Para tablas interactivas en HTML
+
+# Verificamos si los datos existen para mostrar el resumen
+archivo_comentarios <- "data/reddit_comments.rds"
+
+if (file.exists(archivo_comentarios)) {
+  comentarios <- readRDS(archivo_comentarios)
+  
+  resumen_df <- data.frame(
+    Métrica = c("Total de Comentarios", "Usuarios Únicos", "Hilos Analizados"),
+    Valor = c(
+      nrow(comentarios),
+      n_distinct(comentarios$author),
+      n_distinct(comentarios$url)
+    )
+  )
+  
+  # Mostrar tabla interactiva de manera elegante
+  datatable(resumen_df, 
+            options = list(dom = 't', bSort = FALSE), 
+            rownames = FALSE, 
+            caption = "Tabla 1: Resumen del conjunto de datos de Reddit")
+} else {
+  cat("Los datos aún no han sido descargados. Se generarán en el Capítulo 1.")
+}
 ```
+
+Todo el análisis ha sido desarrollado utilizando el lenguaje estadístico R [@R-core] y procesado mediante Quarto.

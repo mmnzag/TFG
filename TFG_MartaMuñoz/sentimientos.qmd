@@ -28,16 +28,31 @@ totales_sentimiento <- data.frame(
 
 ```{r}
 # Creamos un gráfico de barras limpio y claro
-grafico_sentimientos <- ggplot(totales_sentimiento, aes(x = reorder(emocion, valor), y = valor, fill = emocion)) +
-  geom_col(show.legend = FALSE) +
-  coord_flip() + # Barras horizontales para que se lean bien los nombres
-  scale_fill_viridis_d(option = "turbo") +
-  theme_minimal() +
+# grafico_sentimientos <- ggplot(totales_sentimiento, aes(x = reorder(emocion, valor), y = valor, fill = emocion)) +
+#   geom_col(show.legend = FALSE) +
+#   coord_flip() + # Barras horizontales para que se lean bien los nombres
+#   scale_fill_viridis_d(option = "turbo") +
+#   theme_minimal() +
+#   labs(
+#     title = "Emociones en r/technology (Data Science)",
+#     subtitle = "Análisis de sentimientos con el diccionario NRC",
+#     x = "Emoción",
+#     y = "Frecuencia"
+#   )
+
+grafico_sentimientos <- totales_sentimiento %>%
+  mutate(emocion = str_to_title(emocion)) %>%
+  ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_viridis_c(option = "mako") + 
+  theme_minimal(base_size = 12) +
   labs(
-    title = "Emociones en r/technology (Data Science)",
-    subtitle = "Análisis de sentimientos con el diccionario NRC",
-    x = "Emoción",
-    y = "Frecuencia"
+    title = "Distribución de Perfiles Emocionales",
+    subtitle = "Basado en comentarios de r/technology",
+    x = NULL, 
+    y = "Frecuencia Acumulada",
+    caption = "Fuente: API de Reddit | Diccionario NRC"
   )
 
 # Mostramos el gráfico
@@ -91,17 +106,65 @@ ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
 
 ```{r}
 # Necesitas que la columna date_utc esté en formato Date
+# data_con_sentimiento %>%
+#   mutate(fecha = as.Date(date)) %>%
+#   group_by(fecha) %>%
+#   summarise(sentimiento_medio = mean(valencia)) %>%
+#   ggplot(aes(x = fecha, y = sentimiento_medio)) +
+#   geom_line(color = "steelblue", size = 1) +
+#   geom_point() +
+#   geom_hline(yintercept = 0, linetype = "dashed") +
+#   theme_minimal() +
+#   labs(title = "Evolución del Sentimiento Neto",
+#        y = "Valencia Media",
+#        x = "Fecha")
+```
+
+
+```{r}
+library(zoo)
+
 data_con_sentimiento %>%
   mutate(fecha = as.Date(date)) %>%
   group_by(fecha) %>%
   summarise(sentimiento_medio = mean(valencia)) %>%
-  ggplot(aes(x = fecha, y = sentimiento_medio)) +
-  geom_line(color = "steelblue", size = 1) +
-  geom_point() +
-  geom_hline(yintercept = 0, linetype = "dashed") +
+  mutate(media_movil = rollmean(sentimiento_medio, k = 7, fill = NA)) %>% # Media de 7 días
+  ggplot(aes(x = fecha)) +
+  geom_line(aes(y = sentimiento_medio), alpha = 0.3) +
+  geom_line(aes(y = media_movil), color = "darkred", size = 1.2) +
   theme_minimal() +
-  labs(title = "Evolución del Sentimiento Neto",
-       y = "Valencia Media",
-       x = "Fecha")
+  labs(title = "Tendencia del Sentimiento (Media Móvil 7 días)")
+```
+
+
+Correlacion de Spearman
+```{r}
+# Cálculo de la correlación de Spearman
+correlacion <- cor.test(data_con_sentimiento$valencia, 
+                        data_con_sentimiento$score, 
+                        method = "spearman")
+
+print(paste("Coeficiente de correlación:", round(correlacion$estimate, 3)))
+print(paste("P-valor:", correlacion$p.value))
+```
+
+```{r}
+library(scales)
+
+ggplot(data_con_sentimiento, aes(x = valencia, y = score)) +
+  # Usamos escala logarítmica directamente en el eje para mantener los números originales
+  scale_y_log10(labels = comma) + 
+  # Hexbin o puntos con mucha transparencia para ver densidad
+  geom_jitter(alpha = 0.2, color = "midnightblue", width = 0.2) +
+  # Añadimos una línea de tendencia no lineal (GAM) para ver la forma real de la relación
+  geom_smooth(method = "gam", color = "darkorange", size = 1.2) +
+  theme_minimal() +
+  labs(
+    title = "Impacto del Sentimiento en la Popularidad del Post",
+    subtitle = "La línea naranja representa la tendencia suavizada (GAM)",
+    x = "Valencia (Sentimiento Neto)",
+    y = "Score de Reddit (Escala Log)",
+    caption = paste("Correlación de Spearman:", round(correlacion$estimate, 3))
+  )
 ```
 
