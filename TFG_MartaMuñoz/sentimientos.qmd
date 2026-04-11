@@ -1,12 +1,25 @@
 ---
 title: "Análisis de sentimientos"
-format: html
+subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+author: "Marta Muñoz Aguilar"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+    highlight-style: dracula
 ---
 
-```{r}
 
+
+# Extracción y procesamiento 
+```{r}
 library(tidyverse) 
 library(syuzhet) # analisis sentimiento
+library(scales) 
+library(zoo)
 
 textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
 data_texto <- readRDS("data/data_texto.rds")
@@ -14,18 +27,34 @@ data_texto <- readRDS("data/data_texto.rds")
 
 
 ```{r}
-sentimientos <- get_nrc_sentiment(textos_sentimiento$texto_sentimiento, language = "english")
+sentimientos_raw <- get_nrc_sentiment(textos_sentimiento$texto_sentimiento, language = "english")
+```
+
+
+```{r}
+data_con_sentim <- cbind(data_texto, sentimientos_raw) |>
+  mutate(
+    valencia = positive - negative,
+    # Normalizamos el score para evitar que el log(0) de error
+    log_score = log1p(score)
+  )
 
 # Agrupamos los resultados para ver el total del debate
-totales_sentimiento <- data.frame(
-  emocion = names(sentimientos),
-  valor = colSums(sentimientos)
-)
+# totales_sentimiento <- data.frame(
+#   emocion = names(sentimientos),
+#   valor = colSums(sentimientos)
+# )
+totales_emociones <- sentimientos_raw |>
+  summarise(across(everything(), sum)) |>
+  pivot_longer(cols = everything(), names_to = "emocion", values_to = "valor") |>
+  # Excluimos valencia general para ver solo emociones específicas
+  filter(!emocion %in% c("positive", "negative"))
 
 
 ```
 
 
+# Visualización
 ```{r}
 # Creamos un gráfico de barras limpio y claro
 # grafico_sentimientos <- ggplot(totales_sentimiento, aes(x = reorder(emocion, valor), y = valor, fill = emocion)) +
@@ -40,58 +69,149 @@ totales_sentimiento <- data.frame(
 #     y = "Frecuencia"
 #   )
 
-grafico_sentimientos <- totales_sentimiento %>%
-  mutate(emocion = str_to_title(emocion)) %>%
-  ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
-  geom_col() +
-  coord_flip() +
-  scale_fill_viridis_c(option = "mako") + 
-  theme_minimal(base_size = 12) +
-  labs(
-    title = "Distribución de Perfiles Emocionales",
-    subtitle = "Basado en comentarios de r/technology",
-    x = NULL, 
-    y = "Frecuencia Acumulada",
-    caption = "Fuente: API de Reddit | Diccionario NRC"
-  )
+# grafico_sentimientos <- 
+#   # totales_sentimiento |>
+#   totales_emociones |>
+#   mutate(emocion = str_to_title(emocion)) |>
+#   ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
+#   geom_col() +
+#   coord_flip() +
+#   scale_fill_viridis_c(option = "mako") + 
+#   theme_minimal(base_size = 12) +
+#   labs(
+#     title = "Distribución de Perfiles Emocionales",
+#     subtitle = "Basado en comentarios de r/technology",
+#     x = NULL, 
+#     y = "Frecuencia Acumulada",
+#     caption = "Fuente: API de Reddit | Diccionario NRC"
+#   )
+# 
+# # Mostramos el gráfico
+# print(grafico_sentimientos)
 
-# Mostramos el gráfico
-print(grafico_sentimientos)
+
+# ggplot(totales_emociones, aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
+#   geom_col(show.legend = FALSE) +
+#   coord_flip() +
+#   scale_fill_viridis_c(option = "mako") +
+#   theme_minimal(base_size = 12) +
+#   labs(
+#     title = "Distribución de Emociones en r/technology",
+#     subtitle = "Análisis basado en el léxico NRC",
+#     x = NULL,
+#     y = "Intensidad Acumulada",
+#     caption = "Fuente: Elaboración propia a partir de datos de Reddit"
+#   )
+
+totales_sentimiento |>
+  mutate(emocion = str_to_title(emocion)) |> 
+  ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
+    geom_col(show.legend = FALSE) + # Limpiamos el ruido visual (como en el Cód 1)
+    coord_flip() +
+    scale_fill_viridis_c(option = "mako") + 
+    theme_minimal(base_size = 12) +
+    labs(
+      title = "Distribución de Perfiles Emocionales en r/technology",
+      subtitle = "Análisis de sentimiento mediante el léxico NRC",
+      x = NULL, 
+      y = "Frecuencia de términos asociados",
+      caption = "Fuente: Elaboración propia a partir de datos de la API de Reddit y el diccionario NRC"
+    )
+
+# Guardado de alta calidad para el documento final
+# ggsave("grafico_emociones_tfg.png", grafico_final, width = 8, height = 6, dpi = 300)
 ```
 
+
+# Análisis Estadístico: Valencia vs. Score
+
+```{r}
+# # Unimos las columnas de sentimiento con el dataframe original
+# # Asumiendo que 'textos_sentimiento' es tu dataframe limpio
+# data_con_sentimiento <- cbind(data_texto, sentimientos)
+# 
+# # Calculamos una métrica de "Valencia" (Positivo - Negativo)
+# data_con_sentimiento <- data_con_sentimiento |>
+#   mutate(valencia = positive - negative)
+# 
+# # Gráfico de dispersión: Valencia vs Score
+# ggplot(data_con_sentimiento, aes(x = valencia, y = log1p(score))) +
+#   geom_jitter(alpha = 0.3, color = "midnightblue") +
+#   geom_smooth(method = "lm", color = "red") +
+#   theme_minimal() +
+#   labs(title = "Relación entre Sentimiento y Votos (Score)",
+#        subtitle = "Uso de log(score) para manejar la dispersión",
+#        x = "Valencia (Netamente Positivo <-> Netamente Negativo)",
+#        y = "Popularidad (log Score)")
+```
 
 
 ```{r}
-# 1. Unimos las columnas de sentimiento con el dataframe original
-# Asumiendo que 'textos_sentimiento' es tu dataframe limpio
-data_con_sentimiento <- cbind(data_texto, sentimientos)
 
-# 2. Calculamos una métrica de "Valencia" (Positivo - Negativo)
-data_con_sentimiento <- data_con_sentimiento %>%
-  mutate(valencia = positive - negative)
+# Cálculo de la correlación de Spearman (Robusta a outliers)
+cor_test <- cor.test(data_con_sentim$valencia, data_con_sentim$score, method = "spearman")
+label_cor <- paste("Correlación Spearman:", round(cor_test$estimate, 3))
 
-# 3. Gráfico de dispersión: Valencia vs Score
-ggplot(data_con_sentimiento, aes(x = valencia, y = log1p(score))) +
-  geom_jitter(alpha = 0.3, color = "midnightblue") +
-  geom_smooth(method = "lm", color = "red") +
-  theme_minimal() +
-  labs(title = "Relación entre Sentimiento y Votos (Score)",
-       subtitle = "Uso de log(score) para manejar la dispersión",
-       x = "Valencia (Netamente Positivo <-> Netamente Negativo)",
-       y = "Popularidad (log Score)")
+ggplot(data_con_sentim, aes(x = valencia, y = score)) +
+  # Usamos escala logarítmica en Y para manejar la dispersión de votos
+  scale_y_log10(labels = comma) +
+  # Jitter para evitar que los puntos se solapen
+  geom_jitter(alpha = 0.15, color = "midnightblue", width = 0.2) +
+  # Curva GAM para detectar tendencias no lineales
+  geom_smooth(method = "gam", color = "darkorange", size = 1) +
+  theme_light() +
+  labs(
+    title = "Relación entre Sentimiento Neto y Popularidad",
+    subtitle = "Uso de escala logarítmica para el Score (Votos)",
+    x = "Valencia (Negativo <---> Positivo)",
+    y = "Score (Escala Log10)",
+    caption = label_cor
+  )
+
 ```
+
+Corr nula -> la carga emocional no garantiza éxito del post
+La craga se concentra en en 0 -> comentarios eixtosos informativos o descriptivos. Popularidad indep del tono emocioal
+
+
 
 ```{r}
 saveRDS(data_con_sentimiento, "data/data_sentim.rds")
 ```
 
 
+# Análisis Temporal con Media Móvil
+```{r}
+data_temporal <- data_con_sentim |>
+  mutate(fecha = as.Date(date)) |>
+  group_by(fecha) |>
+  summarise(valencia_diaria = mean(valencia, na.rm = TRUE)) |>
+  # Calculamos media móvil de 7 días
+  mutate(media_movil = rollmean(valencia_diaria, k = 7, fill = NA, align = "right"))
+
+ggplot(data_temporal, aes(x = fecha)) +
+  geom_line(aes(y = valencia_diaria), alpha = 0.2, color = "grey20") +
+  geom_line(aes(y = media_movil), color = "firebrick", size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "Evolución Temporal del Sentimiento",
+    subtitle = "La línea roja indica la tendencia suavizada (Media Móvil 7 días)",
+    x = "Fecha",
+    y = "Valencia Media"
+  )
+```
+
+El sentimiento medio se mantiene estable cerca de la neutralidad, con excepción de un evento de alta negatividad detectado el 20 de febrero, donde la valencia media cayó a -4, indicando una respuesta colectiva de rechazo o crítica ante un suceso externo
+
+
+# Perfiles emocionales 
 
 ```{r}
 # Agrupamos por título de hilo (usando la URL o título corto)
-comparativa_hilos <- data_con_sentimiento %>%
-  group_by(url) %>% # O el nombre corto que creamos antes
-  summarise(across(c(trust, fear, joy, sadness, anger), mean)) %>%
+comparativa_hilos <- data_con_sentimiento |>
+  group_by(url) |> # O el nombre corto que creamos antes
+  summarise(across(c(trust, fear, joy, sadness, anger), mean)) |>
   pivot_longer(cols = -url, names_to = "emocion", values_to = "media")
 
 ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
@@ -100,71 +220,5 @@ ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   theme_minimal() +
   theme(legend.position = "none", strip.text = element_text(size = 7)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
-```
-
-
-
-```{r}
-# Necesitas que la columna date_utc esté en formato Date
-# data_con_sentimiento %>%
-#   mutate(fecha = as.Date(date)) %>%
-#   group_by(fecha) %>%
-#   summarise(sentimiento_medio = mean(valencia)) %>%
-#   ggplot(aes(x = fecha, y = sentimiento_medio)) +
-#   geom_line(color = "steelblue", size = 1) +
-#   geom_point() +
-#   geom_hline(yintercept = 0, linetype = "dashed") +
-#   theme_minimal() +
-#   labs(title = "Evolución del Sentimiento Neto",
-#        y = "Valencia Media",
-#        x = "Fecha")
-```
-
-
-```{r}
-library(zoo)
-
-data_con_sentimiento %>%
-  mutate(fecha = as.Date(date)) %>%
-  group_by(fecha) %>%
-  summarise(sentimiento_medio = mean(valencia)) %>%
-  mutate(media_movil = rollmean(sentimiento_medio, k = 7, fill = NA)) %>% # Media de 7 días
-  ggplot(aes(x = fecha)) +
-  geom_line(aes(y = sentimiento_medio), alpha = 0.3) +
-  geom_line(aes(y = media_movil), color = "darkred", size = 1.2) +
-  theme_minimal() +
-  labs(title = "Tendencia del Sentimiento (Media Móvil 7 días)")
-```
-
-
-Correlacion de Spearman
-```{r}
-# Cálculo de la correlación de Spearman
-correlacion <- cor.test(data_con_sentimiento$valencia, 
-                        data_con_sentimiento$score, 
-                        method = "spearman")
-
-print(paste("Coeficiente de correlación:", round(correlacion$estimate, 3)))
-print(paste("P-valor:", correlacion$p.value))
-```
-
-```{r}
-library(scales)
-
-ggplot(data_con_sentimiento, aes(x = valencia, y = score)) +
-  # Usamos escala logarítmica directamente en el eje para mantener los números originales
-  scale_y_log10(labels = comma) + 
-  # Hexbin o puntos con mucha transparencia para ver densidad
-  geom_jitter(alpha = 0.2, color = "midnightblue", width = 0.2) +
-  # Añadimos una línea de tendencia no lineal (GAM) para ver la forma real de la relación
-  geom_smooth(method = "gam", color = "darkorange", size = 1.2) +
-  theme_minimal() +
-  labs(
-    title = "Impacto del Sentimiento en la Popularidad del Post",
-    subtitle = "La línea naranja representa la tendencia suavizada (GAM)",
-    x = "Valencia (Sentimiento Neto)",
-    y = "Score de Reddit (Escala Log)",
-    caption = paste("Correlación de Spearman:", round(correlacion$estimate, 3))
-  )
 ```
 
