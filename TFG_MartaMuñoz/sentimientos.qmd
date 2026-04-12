@@ -221,4 +221,4 @@ ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   theme(legend.position = "none", strip.text = element_text(size = 7)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
 ```
-
+Trust es la emoción más alta en casi todos los hilos seleccionados. Esto es muy positivo para una comunidad tecnológica, indicando credibilidad en las fuentes o en las opiniones compartidas.
