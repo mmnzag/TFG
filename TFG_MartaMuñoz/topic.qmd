@@ -1,7 +1,18 @@
 ---
-title: "Modelado de temas"
-format: html
+title: "Modelado de tópicos"
+subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+author: "Marta Muñoz Aguilar"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+    highlight-style: dracula
 ---
+
+# Carga y preprocesamiento
 
 ```{r}
 library(tidyverse)
@@ -11,31 +22,151 @@ library(ldatuning)
 library(tm)
 library(textstem)
 library(widyr)
+library(ggraph)
+library(igraph)
+library(LDAvis)
+library(servr)
 
 dtm_lda <- readRDS("data/dtm_lda.rds") 
 data_texto <- readRDS("data/data_texto.rds")
 ```
 
 
-Para esta parte primero vamos a hacer un tuning para encontrar el valor óptimo de k, siendo este el número de temas
+<!-- # Tuning -->
+<!-- Para esta parte primero vamos a hacer un tuning para encontrar el valor óptimo de k, siendo este el número de temas -->
+<!-- ```{r} -->
+<!-- # Ejecutamos la función que probará diferentes valores de K -->
+<!-- # Vamos a probar desde 2 hasta 15 tópicos. -->
+<!-- resultados_tuning <- FindTopicsNumber( -->
+<!--   dtm_lda, -->
+<!--   topics = seq(from = 2, to = 15, by = 1), -->
+<!--   metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"), -->
+<!--   method = "Gibbs", -->
+<!--   control = list(seed = 123), -->
+<!--   mc.cores = 2 -->
+<!-- ) -->
+
+<!-- # Mostramos la tabla con los valores exactos -->
+<!-- print(resultados_tuning) -->
+
+<!-- # Generamos el gráfico para decidir visualmente -->
+<!-- FindTopicsNumber_plot(resultados_tuning) -->
+<!-- ``` -->
+
+<!-- Los siguietes médotos maximizan el número -->
+<!-- Griffiths2004: Se basa en la verosimilitud logarítmica. El valor máximo suele indicar el número ideal de temas. -->
+
+<!-- Deveaud2014: Mide la divergencia entre la distribución de palabras de los tópicos. Queremos que los temas sean lo más distintos posible (máxima divergencia). -->
+
+
+<!-- Minimizar: -->
+<!-- CaoJuan2009: Mide la similitud entre tópicos. Si es muy alta, los temas están solapados. Buscamos el valor mínimo para tener temas bien diferenciados. -->
+
+<!-- Arun2010: Se basa en la divergencia de Kullback-Leibler. Al igual que la anterior, buscamos el punto mínimo. -->
+
+<!-- ```{r} -->
+<!-- # Aplicamos el modelo LDA.  -->
+<!-- # La 'k = 4' significa que le pedimos al algoritmo que busque 4 temas distintos. -->
+<!-- modelo_lda <- LDA(dtm_lda, k = 10, control = list(seed = 123)) -->
+
+<!-- # Extraemos las 8 palabras más representativas de cada uno de los 4 temas -->
+<!-- terminos_top <- terms(modelo_lda, 8) -->
+
+<!-- # cat("\n--- LOS 4 TEMAS PRINCIPALES DEL DEBATE ---\n") -->
+<!-- print(terminos_top) -->
+<!-- ``` -->
+
+
+# Limpieza
+
 ```{r}
-# Ejecutamos la función que probará diferentes valores de K
-# Vamos a probar desde 2 hasta 15 tópicos.
-resultados_tuning <- FindTopicsNumber(
-  dtm_lda,
-  topics = seq(from = 2, to = 15, by = 1),
-  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
-  method = "Gibbs",
-  control = list(seed = 123),
-  mc.cores = 2
-)
+# data("stop_words")
+# extra_stops_words <- tribble(
+#   ~word, ~lexicon,
+#   "just", "custom",
+#   "dont", "custom",
+#   "can",  "custom",
+#   "get",  "custom",
+#   "will", "custom",
+#   "like", "custom",
+#   "also", "custom",
+#   "even", "custom",
+#   "now",  "custom",
+#   "say",  "custom",
+#   "going", "custom",
+#   "031re", "custom" # Por si acaso sobrevive algún residuo
+# )
+# 
+# # 3. Combinamos ambas listas
+# stop_words <- stop_words |>
+#   bind_rows(extra_stops_words)
 
-# Mostramos la tabla con los valores exactos
-print(resultados_tuning)
-
-# Generamos el gráfico para decidir visualmente
-FindTopicsNumber_plot(resultados_tuning)
 ```
+
+
+<!-- La función unnest_tokens es la piedra angular del análisis de texto en el ecosistema Tidytext de R. Su trabajo consiste en tomar una columna de texto "bruto" (frases o párrafos) y dividirla en unidades individuales llamadas tokens (que suelen ser palabras sueltas). -->
+
+<!-- Se observa que hay palabras que tienen el mismo significado, como *job* y *jobs* -->
+```{r}
+# # Tokenizamos y filtramos
+# clean_text_dtm <- data_texto |>
+#   unnest_tokens(word, comment) |>
+#   anti_join(stop_words, by = "word") |>
+#   # Opcional: quitar palabras de menos de 3 caracteres (suelen ser ruido)
+#   filter(nchar(word) > 2) |>
+#   mutate(word = lemmatize_words(word))
+# 
+# # Volvemos a agrupar si necesitas el texto por documento
+# lda_data_final <- clean_text_dtm |>
+#   group_by(comment_id) |>
+#   summarise(texto_final = paste(word, collapse = " "))
+```
+
+
+
+```{r}
+# Tokenización y limpieza básica
+text_tokens <- data_texto |>
+  unnest_tokens(word, comment) |>
+  anti_join(stop_words, by = "word") |>
+  filter(nchar(word) > 2) |>
+  mutate(word = textstem::lemmatize_words(word))
+
+# Calcular TF-IDF para filtrar ruido matemáticamente
+text_tfidf <- text_tokens |>
+  count(comment_id, word) |>
+  bind_tf_idf(word, comment_id, n) |>
+  # Filtramos palabras demasiado comunes (ajusta el 0.01 si es necesario)
+  filter(tf_idf > 0.01) 
+
+# Reconstruir la matriz DTM
+dtm_lda_limpio <- text_tfidf |>
+  cast_dtm(comment_id, word, n)
+
+# Eliminar documentos vacíos
+row_totals <- apply(dtm_lda_limpio, 1, sum)
+dtm_lda_limpio <- dtm_lda_limpio[row_totals > 0, ]
+```
+
+
+# Tuning 
+
+Buscamos el mejor parámetro k, el número de topics óptimo
+
+```{r}
+# corpus <- Corpus(VectorSource(dtm_lda_limpio$texto_final))
+# 
+# dtm_lda_v2 <- DocumentTermMatrix(corpus)
+# 
+# # Eliminar documentos vacíos (si algún comentario se quedó sin palabras tras quitar stopwords)
+# row_totals <- apply(dtm_lda, 1, sum)
+# dtm_lda_v2 <- dtm_lda_v2[row_totals > 0, ]
+# 
+# # Guardar para el análisis de tópicos
+# saveRDS(dtm_lda, "data/dtm_lda.rds")
+```
+
+
 
 Los siguietes médotos maximizan el número
 Griffiths2004: Se basa en la verosimilitud logarítmica. El valor máximo suele indicar el número ideal de temas.
@@ -47,84 +178,9 @@ Minimizar:
 CaoJuan2009: Mide la similitud entre tópicos. Si es muy alta, los temas están solapados. Buscamos el valor mínimo para tener temas bien diferenciados.
 
 Arun2010: Se basa en la divergencia de Kullback-Leibler. Al igual que la anterior, buscamos el punto mínimo.
-
-```{r}
-# Aplicamos el modelo LDA. 
-# La 'k = 4' significa que le pedimos al algoritmo que busque 4 temas distintos.
-modelo_lda <- LDA(dtm_lda, k = 10, control = list(seed = 123))
-
-# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
-terminos_top <- terms(modelo_lda, 8)
-
-# cat("\n--- LOS 4 TEMAS PRINCIPALES DEL DEBATE ---\n")
-print(terminos_top)
-```
-
-
-
-Aquí podemos observar que muchas de las palabras de los temas no tienen valor como *just*, *will*, *can*, etc. Como no representan nada vamos a eliminarlas
-```{r}
-data("stop_words")
-extra_stops_words <- tribble(
-  ~word, ~lexicon,
-  "just", "custom",
-  "dont", "custom",
-  "can",  "custom",
-  "get",  "custom",
-  "will", "custom",
-  "like", "custom",
-  "also", "custom",
-  "even", "custom",
-  "now",  "custom",
-  "say",  "custom",
-  "going", "custom",
-  "031re", "custom" # Por si acaso sobrevive algún residuo
-)
-
-# 3. Combinamos ambas listas
-stop_words <- stop_words |>
-  bind_rows(extra_stops_words)
-
-```
-
-
-La función unnest_tokens es la piedra angular del análisis de texto en el ecosistema Tidytext de R. Su trabajo consiste en tomar una columna de texto "bruto" (frases o párrafos) y dividirla en unidades individuales llamadas tokens (que suelen ser palabras sueltas).
-
-Se observa que hay palabras que tienen el mismo significado, como *job* y *jobs*
-```{r}
-# Tokenizamos y filtramos
-clean_text_dtm <- data_texto |>
-  unnest_tokens(word, comment) |>
-  anti_join(stop_words, by = "word") |>
-  # Opcional: quitar palabras de menos de 3 caracteres (suelen ser ruido)
-  filter(nchar(word) > 2) |>
-  mutate(word = lemmatize_words(word))
-
-# Volvemos a agrupar si necesitas el texto por documento
-lda_data_final <- clean_text_dtm |>
-  group_by(comment_id) |>
-  summarise(texto_final = paste(word, collapse = " "))
-```
-
-
-Volvemos a repetir LDA
-```{r}
-corpus <- Corpus(VectorSource(lda_data_final$texto_final))
-
-dtm_lda <- DocumentTermMatrix(corpus)
-
-# Eliminar documentos vacíos (si algún comentario se quedó sin palabras tras quitar stopwords)
-row_totals <- apply(dtm_lda, 1, sum)
-dtm_lda <- dtm_lda[row_totals > 0, ]
-
-# Guardar para el análisis de tópicos
-saveRDS(dtm_lda, "data/dtm_lda.rds")
-```
-
-
 ```{r}
 resultados_tuning <- FindTopicsNumber(
-  dtm_lda,
+  dtm_lda_limpio,
   topics = seq(from = 2, to = 15, by = 1),
   metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
   method = "Gibbs",
@@ -138,10 +194,59 @@ resultados_tuning
 # Generamos el gráfico para decidir visualmente
 FindTopicsNumber_plot(resultados_tuning)
 ```
+Se seleccionó un valor de k=6 porque representa el punto óptimo donde se maximiza la divergencia entre temas (Deveaud) minimizando el solapamiento entre ellos (CaoJuan), garantizando que los tópicos sean interpretables y no redundantes
 
 
+
+# Creación del modelo
 ```{r}
-modelo_lda <- LDA(dtm_lda, k = 6, control = list(seed = 123))
+modelo_lda <- LDA(dtm_lda_limpio, k = 6, control = list(seed = 123))
+
+# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
+terminos_top <- terms(modelo_lda, 8)
+
+print(terminos_top)
+```
+Se repiten mucho palabras bastante genéricas como people, además de aparecer palabras obscenas.
+```{r}
+# 1. Definimos las stopwords específicas de tu dominio
+# Añade o quita palabras de esta lista según lo que vayas viendo
+stopwords_dominio <- tibble(
+  word = c("people", "job", "company", "time", "lot", "bad", "day", "shit", "fuck")
+)
+
+# 2. Tokenización y limpieza (con el filtro extra)
+text_tokens <- data_texto |>
+  unnest_tokens(word, comment) |>
+  # Filtro 1: Stopwords estándar del inglés (the, and, in...)
+  anti_join(stop_words, by = "word") |>
+  # Filtro 2: NUESTRAS stopwords del dominio
+  anti_join(stopwords_dominio, by = "word") |>
+  # Filtro 3: Palabras muy cortas
+  filter(nchar(word) > 2) |>
+  # Lematización (convertir plurales a singulares, etc.)
+  mutate(word = textstem::lemmatize_words(word))
+
+# 3. Calcular TF-IDF para filtrar ruido matemáticamente
+text_tfidf <- text_tokens |>
+  count(comment_id, word) |>
+  bind_tf_idf(word, comment_id, n) |>
+  filter(tf_idf > 0.01) # Mantenemos este filtro que ya tenías
+
+# 4. Reconstruir la matriz DTM
+dtm_lda_limpio <- text_tfidf |>
+  cast_dtm(comment_id, word, n)
+
+# 5. Eliminar documentos vacíos
+row_totals <- apply(dtm_lda_limpio, 1, sum)
+dtm_lda_limpio <- dtm_lda_limpio[row_totals > 0, ]
+```
+
+
+
+Se repite modelo
+```{r}
+modelo_lda <- LDA(dtm_lda_limpio, k = 6, control = list(seed = 123))
 
 # Extraemos las 8 palabras más representativas de cada uno de los 4 temas
 terminos_top <- terms(modelo_lda, 8)
@@ -154,36 +259,70 @@ print(terminos_top)
 saveRDS(modelo_lda, "data/modelo_lda.rds")
 ```
 
-
-
-Ver qué palabras tiene más peso en los topics
+# Nombrado de tópicos
 ```{r}
-# Extraemos las probabilidades beta (palabra-tópico)
+nombres_temas <- c(
+  "1" = "a", 
+  "2" = "b", 
+  "3" = "c", 
+  "4" = "d",
+  "5" = "e",
+  "6" = "f"
+)
+```
+
+
+# Gráfico Beta
+Ver qué palabras tiene más peso en los topics, es decir, ¿qué probabilidad hay de que un tópico contenga una palabra?
+```{r}
 top_terms <- tidy(modelo_lda, matrix = "beta") |>
   group_by(topic) |>
   slice_max(beta, n = 10) |> 
   ungroup() |>
-  arrange(topic, -beta)
+  mutate(
+    topic_name = nombres_temas[as.character(topic)],
+    term = reorder_within(term, beta, topic_name)
+  )
 
-# Graficamos
-top_terms |>
-  mutate(term = reorder_within(term, beta, topic)) |>
-  ggplot(aes(beta, term, fill = factor(topic))) +
-  geom_col(show.legend = FALSE) +
-  facet_wrap(~ topic, scales = "free") +
+ggplot(top_terms, aes(x = beta, y = term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE, alpha = 0.85) +
+  facet_wrap(~ topic_name, scales = "free_y", ncol = 2) +
   scale_y_reordered() +
-  theme_minimal() +
-  labs(title = "Top 10 términos por Tópico",
-       x = "Probabilidad (Beta)",
-       y = NULL)
+  scale_fill_viridis_d(option = "plasma") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Palabras más representativas por Tópico",
+    x = "Probabilidad Beta",
+    y = NULL
+  )
+# # Extraemos las probabilidades beta (palabra-tópico)
+# top_terms <- tidy(modelo_lda, matrix = "beta") |>
+#   group_by(topic) |>
+#   slice_max(beta, n = 10) |> 
+#   ungroup() |>
+#   arrange(topic, -beta)
+# 
+# # Graficamos
+# top_terms |>
+#   mutate(term = reorder_within(term, beta, topic)) |>
+#   ggplot(aes(beta, term, fill = factor(topic))) +
+#   geom_col(show.legend = FALSE) +
+#   facet_wrap(~ topic, scales = "free") +
+#   scale_y_reordered() +
+#   theme_minimal() +
+#   labs(title = "Top 10 términos por Tópico",
+#        x = "Probabilidad (Beta)",
+#        y = NULL)
 ```
 
+
+# Prevalencia e Impacto Real
 
 ¿Cuál es el tema que más preocupa a los usuarios?
 ```{r}
 # Extraemos las probabilidades gamma (documento-tópico)
-prevalencia <- tidy(modelo_lda, matrix = "gamma") %>%
-  group_by(topic) %>%
+prevalencia <- tidy(modelo_lda, matrix = "gamma") |>
+  group_by(topic) |>
   summarise(promedio_gamma = mean(gamma))
 
 ggplot(prevalencia, aes(x = factor(topic), y = promedio_gamma, fill = factor(topic))) +
@@ -195,16 +334,7 @@ ggplot(prevalencia, aes(x = factor(topic), y = promedio_gamma, fill = factor(top
        y = "Probabilidad media (Gamma)")
 ```
 
-Correlación de tópicos
 
-```{r}
-correlacion_topicos <- tidy(modelo_lda, matrix = "gamma") |>
-  pairwise_cor(item = topic, feature = document, value = gamma) |>
-  arrange(desc(correlation))
-
-# Mira las primeras filas
-head(correlacion_topicos)# Solo las relaciones con cierta fuerza
-```
 
 
 ```{r}
@@ -226,8 +356,44 @@ ggplot(impacto_real, aes(x = factor(topic), y = impacto_total, fill = factor(top
        x = "Tópico", 
        y = "Votos Totales Ponderados")
 ```
+Los tópicos de alta prevalencia y bajo impacto, como el 2 y el 5, son aquellos de los que la gente habla mucho pero no generan traccion, temas triviales.
 
+Los tópicos de alta prevalencia y alto impacto, como el 6, son los que generan mucho contenido así como interés.
 
+# Correlación de tópicos
+
+```{r}
+correlacion_topicos <- tidy(modelo_lda, matrix = "gamma") |>
+  widyr::pairwise_cor(item = topic, feature = document, value = gamma) |>
+  arrange(desc(correlation)) |>
+  print()
+
+correlacion_nombres <- correlacion_topicos |>
+  mutate(
+    item1 = nombres_temas[as.character(item1)],
+    item2 = nombres_temas[as.character(item2)]
+  )
+
+set.seed(123)
+grafo <- graph_from_data_frame(correlacion_nombres, directed = FALSE)
+
+ggraph(grafo, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = (correlation), edge_width = (correlation)), color = "#4B0082") +
+  geom_node_point(size = 8, color = "#FF8C00") +
+  geom_node_text(aes(label = name), repel = TRUE, size = 4, fontface = "bold") +
+  theme_void() +
+  labs(title = "Red de Co-ocurrencia de Tópicos")
+```
+La red de correlación revela una estructura de compartimentos estancos en el discurso de los usuarios. Las fuertes correlaciones negativas  indican mutualidad exclusiva: los usuarios tienden a centrar sus intervenciones en un único eje temático, sin mezclar conceptos de otros dominios en un mismo comentario.
+
+```{r}
+# correlacion_topicos <- tidy(modelo_lda, matrix = "gamma") |>
+#   pairwise_cor(item = topic, feature = document, value = gamma) |>
+#   arrange(desc(correlation))
+# 
+# # Mira las primeras filas
+# head(correlacion_topicos)# Solo las relaciones con cierta fuerza
+```
 
 ```{r}
 # red_semantica <- data_texto |>
