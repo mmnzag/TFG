@@ -1,6 +1,15 @@
 ---
-title: "Carga y preprocesamiento"
-format: html
+title: "Carga y preprocesamiento de datos"
+subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+author: "Marta Muñoz Aguilar"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+    highlight-style: dracula
 ---
 
 
@@ -10,65 +19,83 @@ library(tidyverse)
 library(igraph) # sna y visualizacion
 library(ggraph) # visualizacion
 library(tm) # text mining 
+library(textstem) # Para lematización
 ```
 
 ## Carga de datos
 
 Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología
 ```{r}
-archivo_datos <- "data/reddit_thread.rds"
+archivo_datos <- "data/reddit_thread_crypto.rds"
 
 if (file.exists(archivo_datos)) {
   # Si ya lo descargamos antes, lo cargamos del disco
   hilos <- readRDS(archivo_datos)
 } else {
   # Si no existe, intentamos descargarlo
+  # hilos <- find_thread_urls(
+  #   keywords = "AGI",           # La palabra mágica: Inteligencia Artificial General. Despierta tanto a utópicos como a catastrofistas.
+  #   subreddit = "singularity",  # El foro donde la gente cree que la IA es una religión
+  #   sort_by = "comments",       # ¡CRÍTICO! Pedimos que nos traiga los hilos ordenados por mayor cantidad de pelea/debate, no por "likes".
+  #   period = "year"             # Cogemos un año entero para asegurar volumen
+  # )
   hilos <- find_thread_urls(
-  keywords = "AI", 
-  subreddit = "technology", 
-  sort_by = "comments", 
-  period = "month"
+    keywords = "crypto", 
+    subreddit = "technology", # Un foro más técnico y polarizado
+    sort_by = "comments",          # Buscamos debate/peleas, no likes
+    period = "year"             
   )
-  saveRDS(hilos, "data/reddit_thread.rds")
+  saveRDS(hilos, archivo_datos)
 }
 
+cat("Hilos encontrados para el nuevo debate:", nrow(hilos))
 head(hilos)
 
 ```
 
 
-Ahora se elige los 5 hilos con más comentarios. 
+Calculamos el acumulado de comentarios para cubrir el 70% del volumen total del subreddit
 ```{r}
-hilos_por_comentarios <- hilos[order(-hilos$comments), ]
 
-url_objetivo <- hilos_por_comentarios$url[1:5]
+hilos_ordenados <- hilos |> 
+  arrange(desc(comments)) |> 
+  mutate(cum_prop = cumsum(comments) / sum(comments))
+
+hilos_seleccionados <- hilos_ordenados |> 
+  filter(cum_prop <= 1)
+
+url_objetivo <- hilos_seleccionados$url
+message(paste("Seleccionados", nrow(hilos_seleccionados), "hilos para cubrir el 80% del volumen."))
 
 ```
 
 Se descargan los comentarios de los hilos y su contenido
 ```{r}
+# Descarga de contenido
+path_comentarios <- "data/reddit_comments.rds"
+# if (file.exists(path_comentarios)) {
+#   contenido <- readRDS(path_comentarios)
+# } else {
+#   contenido <- get_thread_content(url_objetivo)
+#   saveRDS(contenido, path_comentarios)
+# }
+contenido <- get_thread_content(url_objetivo)
+saveRDS(contenido, path_comentarios)
 
-path_comment <- "data/reddit_comments.rds"
-
-if (file.exists(path_comment)) {
-  # Si ya lo tenemos, lo cargamos
-  message("Cargando contenido desde caché local...")
-  contenido <- readRDS(path_comment)
-  
-} else {
-  # Si no existe, descargamos con una pequeña pausa para evitar bloqueos
-  message("Descargando contenido de Reddit (esto puede tardar)...")
-  
-  # Intentamos la descarga
-  contenido <- get_thread_content(url_objetivo)
-  
-  # Guardamos inmediatamente para que no falle la próxima vez
-  saveRDS(contenido, path_comment)
-}
 comentarios <- contenido$comments
-datos_posts <- contenido$threads
+```
 
-head(datos_posts)
+
+Se limpian los datos quitando los posts borrados y además, añadiremos una columna con el id del comentario padre de forma que si alguien responde al comentario "1", su id será "1_1"
+```{r}
+#Limpieza de estructura (SNA y Textos)
+clean_data <- comentarios |>
+  filter(author != "[deleted]" & author != "AutoModerator") |> 
+  mutate(parent_id = if_else(str_detect(comment_id, "_"),
+                             str_remove(comment_id, "_[0-9]+$"),
+                             NA_character_)) 
+
+
 ```
 
 Para hacer un análisis de texto (NLP) se usa la columna comment.
@@ -87,17 +114,6 @@ Para ver sentimientos se analiza cómo cambia el texto en función de score (vot
 head(comentarios$score)
 ```
 
-Se limpian los datos quitando los posts borrados y además, añadiremos una columna con el id del comentario padre de forma que si alguien responde al comentario "1", su id será "1_1"
-```{r}
-clean_data <- comentarios |>
-  filter(author != "[deleted]") |>
-  # recortamos el último guion bajo y su número
-  mutate(parent_id = if_else(str_detect(comment_id, "_"),
-                             str_remove(comment_id, "_[0-9]+$"),
-                             NA_character_) # Si no hay guion bajo ponemos NA (raíz)
-  )
-```
-
 ## Preparación de datos
 Para ello, vamos a separar la preparación en dos partes: una para los textos y otra para las relaciones entre usuarios.
 
@@ -113,36 +129,30 @@ data_sna <- clean_data |>
   drop_na() |> # se quitan los hilos originales
   filter(from != to) # se quitan autorespuestas
 
-```
 
-Guardamos para usar posteriormente
-```{r}
 saveRDS(data_sna, "data/data_sna.rds")
 ```
 
 ### Procesamiento de texto
 
-Primero, se limpia el texto usando expresiones regulares para eliminar todo lo que no sean caracteres
+Primero, se limpia el texto usando expresiones regulares para eliminar todo lo que no sean caracteres y lematización para reducir las palabras a su raíz
 ```{r}
 # Limpieza previa con expresiones regulares para quitar basura de internet
 data_texto <- clean_data |>
-  mutate(texto = str_replace_all(comment, "[^[:alnum:][:space:][:punct:]]", ""))
-  # mutate(texto = str_replace_all(comment, "http[s]?://\\S+", "")) |> # Fuera URLs
-  # mutate(texto = str_replace_all(comment, "&amp;", "and")) |>         # Limpiar ampersands
-  # mutate(texto = str_replace_all(texto, "<.*?>", "")) |> # fuera etiquetas HTML coladas
-  # mutate(texto = str_replace_all(texto, "\\\\[0-9]{3}", "")) # fuera los \031
+  mutate(texto_limpio = comment |>
+           str_replace_all("http[s]?://\\S+", "") |>        # Quitar URLs
+           str_replace_all("[^[:alnum:][:space:]]", "") |>  # Solo alfanumérico
+           str_to_lower() |>                                # Minúsculas
+           lemmatize_strings())                             # Lematizar (textstem)
 
-```
-
-```{r}
-saveRDS(data_texto, "data/data_texto.rds")
+saveRDS(data_texto, "data/data_texto_procesado.rds")
 ```
 
 
 
 ```{r}
 # Creamos el Corpus de texto que usa el paquete 'tm'
-corpus <- VCorpus(VectorSource(data_texto$texto))
+corpus <- VCorpus(VectorSource(data_texto$texto_limpio))
 
 # Proceso estándar de limpieza de texto
 corpus <- tm_map(corpus, content_transformer(tolower)) # Todo a minúsculas
@@ -191,10 +201,4 @@ saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
 
 #### Análisis formal de conceptos
 
-Se crea una matriz booleana, siendo 1 que aparece y 0 que no
-```{r}
-# matriz_fca <- as.matrix(dtm_lda)
-#matriz_fca[matriz_fca > 0] <- 1 # Convertimos cualquier frecuencia > 0 en un 1 booleano
-
-#saveRDS(matriz_fca, "data/matriz_fca.rds")
-```
+En el caso de FCA, se creará la estructura de datos más tarde, ya que se usará datos de fases anteriores. 

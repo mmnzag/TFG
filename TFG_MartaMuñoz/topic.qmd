@@ -26,9 +26,12 @@ library(ggraph)
 library(igraph)
 library(LDAvis)
 library(servr)
+# Carga de librerías necesarias para llamadas a API
+library(httr)
+library(jsonlite)
 
 dtm_lda <- readRDS("data/dtm_lda.rds") 
-data_texto <- readRDS("data/data_texto.rds")
+data_texto <- readRDS("data/data_texto_procesado.rds")
 ```
 
 
@@ -260,20 +263,73 @@ saveRDS(modelo_lda, "data/modelo_lda.rds")
 ```
 
 # Nombrado de tópicos
+En esta sección usaremos la API de Gemini para nombrar cada tópico. 
 ```{r}
-nombres_temas <- c(
-  "1" = "a", 
-  "2" = "b", 
-  "3" = "c", 
-  "4" = "d",
-  "5" = "e",
-  "6" = "f"
-)
+# 1. Definimos tu API KEY (Sustituye por la tuya real y NUNCA la subas a GitHub)
+mi_api_key <- Sys.getenv("GEMINI_API_KEY")
+
+# 2. Preparamos las palabras de cada tópico en formato texto
+# Esto convierte la matriz de términos en cadenas, ej: "people, job, time..."
+temas_palabras <- apply(terminos_top, 2, paste, collapse = ", ")
+
+# 3. Creamos la función que conecta con el LLM
+nombrar_tema_gemini <- function(palabras, api_key) {
+  prompt <- paste("Eres un analista de datos analizando Reddit. Basado en este grupo de palabras clave en inglés extraídas con LDA, genera un título corto (máximo 4 palabras) ESTRICTAMENTE EN INGLÉS que describa de qué trata este tema. Responde únicamente con el título, sin comillas ni explicaciones. Palabras:", palabras)  
+  # La URL lleva la clave integrada
+  # Fíjate que ahora dice gemini-2.5-flash en lugar de 1.5
+  url_gemini <- paste0("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=", api_key)  
+  # Estructura JSON específica que pide Gemini
+  cuerpo_peticion <- list(
+    contents = list(
+      list(
+        parts = list(
+          list(text = prompt)
+        )
+      )
+    ),
+    generationConfig = list(
+      temperature = 0.3 # Baja temperatura para respuestas directas
+    )
+  )
+  
+  respuesta <- POST(
+    url = url_gemini,
+    content_type_json(),
+    encode = "json",
+    body = cuerpo_peticion
+  )
+  
+  contenido <- content(respuesta, as = "parsed", type = "application/json")
+  
+  # Control de errores
+  if (!is.null(contenido$error)) {
+    cat("\n❌ ERROR DE GEMINI:\n")
+    cat(contenido$error$message, "\n")
+    return("Error en API")
+  }
+  
+  # Extraemos el texto de la respuesta de Gemini
+  texto_final <- contenido$candidates[[1]]$content$parts[[1]]$text
+  
+  # Limpiamos posibles saltos de línea al final del texto
+  return(trimws(texto_final))
+}
+
+# 4. Ejecutamos la función sobre nuestros 6 temas
+# (Descomenta las siguientes líneas cuando tengas tu API Key)
+
+nombres_ia <- sapply(temas_palabras, nombrar_tema_gemini, api_key = mi_api_key)
+# 
+# # 5. Sustituimos tus nombres manuales por los generados
+nombres_temas <- setNames(nombres_ia, as.character(1:6))
+print(nombres_temas)
+
+colnames(terminos_top) <- nombres_temas
 ```
 
 
 # Gráfico Beta
-Ver qué palabras tiene más peso en los topics, es decir, ¿qué probabilidad hay de que un tópico contenga una palabra?
+Vemos cuáles son las palabras más representativas de cada tema. 
 ```{r}
 top_terms <- tidy(modelo_lda, matrix = "beta") |>
   group_by(topic) |>
@@ -356,9 +412,9 @@ ggplot(impacto_real, aes(x = factor(topic), y = impacto_total, fill = factor(top
        x = "Tópico", 
        y = "Votos Totales Ponderados")
 ```
-Los tópicos de alta prevalencia y bajo impacto, como el 2 y el 5, son aquellos de los que la gente habla mucho pero no generan traccion, temas triviales.
+Los tópicos de alta prevalencia y bajo impacto, como el 3, son aquellos de los que la gente habla mucho pero no generan traccion, temas triviales.
 
-Los tópicos de alta prevalencia y alto impacto, como el 6, son los que generan mucho contenido así como interés.
+Los tópicos de alta prevalencia y alto impacto, como el 1 y 2, son los que generan mucho contenido así como interés.
 
 # Correlación de tópicos
 

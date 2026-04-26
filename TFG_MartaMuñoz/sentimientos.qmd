@@ -20,9 +20,11 @@ library(tidyverse)
 library(syuzhet) # analisis sentimiento
 library(scales) 
 library(zoo)
+library(igraph)
 
 textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
-data_texto <- readRDS("data/data_texto.rds")
+data_texto <- readRDS("data/data_texto_procesado.rds")
+tabla_roles <- readRDS("data/tabla_roles.rds")
 ```
 
 
@@ -103,7 +105,7 @@ totales_emociones <- sentimientos_raw |>
 #     caption = "Fuente: Elaboración propia a partir de datos de Reddit"
 #   )
 
-totales_sentimiento |>
+totales_emociones |>
   mutate(emocion = str_to_title(emocion)) |> 
   ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
     geom_col(show.legend = FALSE) + # Limpiamos el ruido visual (como en el Cód 1)
@@ -176,7 +178,7 @@ La craga se concentra en en 0 -> comentarios eixtosos informativos o descriptivo
 
 
 ```{r}
-saveRDS(data_con_sentimiento, "data/data_sentim.rds")
+saveRDS(data_con_sentim, "data/data_sentim.rds")
 ```
 
 
@@ -209,7 +211,7 @@ El sentimiento medio se mantiene estable cerca de la neutralidad, con excepción
 
 ```{r}
 # Agrupamos por título de hilo (usando la URL o título corto)
-comparativa_hilos <- data_con_sentimiento |>
+comparativa_hilos <- data_con_sentim |>
   group_by(url) |> # O el nombre corto que creamos antes
   summarise(across(c(trust, fear, joy, sadness, anger), mean)) |>
   pivot_longer(cols = -url, names_to = "emocion", values_to = "media")
@@ -222,3 +224,69 @@ ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
 ```
 Trust es la emoción más alta en casi todos los hilos seleccionados. Esto es muy positivo para una comunidad tecnológica, indicando credibilidad en las fuentes o en las opiniones compartidas.
+
+
+
+# 5. Integración SNA-NLP: Detección de Cámaras de Eco
+
+Una vez analizada la estructura de la red (SNA) y la carga emocional de los mensajes (NLP), procedemos a cruzar ambas dimensiones para responder a una de las preguntas de investigación: ¿Existen cámaras de eco en esta comunidad de Reddit?
+
+```{r}
+
+# 1. Unimos la comunidad (SNA) con el sentimiento (NLP)
+# Asumimos que tienes 'tabla_roles' de SNA y 'data_con_sentimiento' de sentimientos
+data_echo <- tabla_roles |>
+  inner_join(data_con_sentim, by = c("Usuario" = "author")) |>
+  select(Usuario, Comunidad, valencia)
+
+# 2. Calculamos la homogeneidad de sentimiento por comunidad
+resumen_camaras <- data_echo |>
+  group_by(Comunidad) |>
+  summarise(
+    n_usuarios = n(),
+    sentimiento_medio = mean(valencia, na.rm = TRUE),
+    desviacion = sd(valencia, na.rm = TRUE),
+    # Si la desviación es baja, el grupo es muy homogéneo (posible cámara de eco)
+    indice_homogeneidad = 1 / (desviacion + 1) 
+  ) |>
+  filter(n_usuarios > 5) |>
+  arrange(desc(indice_homogeneidad))
+
+# 3. Visualización de la polarización entre clústeres
+# ggplot(data_echo, aes(x = Comunidad, y = valencia, fill = Comunidad)) +
+#   geom_boxplot(show.legend = FALSE) +
+#   theme_minimal() +
+#   labs(
+#     title = "Análisis de Polarización por Comunidad",
+#     subtitle = "Comunidades con cajas muy estrechas y alejadas del cero indican cámaras de eco",
+#     x = "ID de Comunidad (Clúster Louvain)",
+#     y = "Valencia del Sentimiento"
+#   )
+# 3. Visualización Avanzada: Violín + Nube de puntos (Jitter)
+ggplot(data_echo, aes(x = as.factor(Comunidad), y = valencia, fill = as.factor(Comunidad))) +
+  
+  # 1. La capa del violín (muestra la densidad y forma del grupo)
+  geom_violin(alpha = 0.5, color = NA, trim = FALSE) +
+  
+  # 2. La capa de los usuarios (cada puntito es un comentario)
+  geom_jitter(width = 0.15, alpha = 0.4, size = 1, color = "midnightblue") +
+  
+  # 3. Añadimos un rombo rojo para marcar exactamente la media matemática
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "red") +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Análisis de Polarización: Distribución Real del Sentimiento",
+    subtitle = "Las concentraciones densas de puntos indican consenso (Cámaras de Eco)",
+    x = "Comunidad (Clúster Louvain)",
+    y = "Valencia (Negativo <---> Positivo)"
+  )
+```
+El análisis de violines revela que la comunidad 3 es la más optimista respecto a la IA (sentimiento medio de 0.37), mientras que la comunidad 2 es la más escéptica (0.13). Sin embargo, el índice de homogeneidad muestra que a medida que las comunidades crecen en número de usuarios (Clústeres 1, 2 y 3), la polarización individual aumenta, como reflejan las colas extendidas en el eje de valencia. Por el contrario, los grupos más pequeños (Clúster 6) presentan una mayor cohesión interna, sugiriendo la formación de micro-cámaras de eco donde el sentimiento es más uniforme
+
+
+

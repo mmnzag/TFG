@@ -5,263 +5,567 @@ format: html
 
 ```{r}
 library(tidyverse)
+library(stringr)
 library(fcaR)
 library(tidytext)
 library(hassediagrams)
 library(hasseDiagram)
 
-matriz_fca <- readRDS("data/matriz_fca.rds") 
+# matriz_fca <- readRDS("data/matriz_fca.rds") 
 modelo_lda <- readRDS("data/modelo_lda.rds") 
-data_texto <- readRDS("data/data_texto.rds")
+data_texto <- readRDS("data/data_texto_procesado.rds")
 data_sentim <- readRDS("data/data_sentim.rds")
 ```
 
 
+
+
 ```{r}
+# --- 1. PREPARACIÓN DE LA MATRIZ FCA INTEGRADA ---
+
+# 1. Binarizamos los Tópicos (Dejamos el umbral en 0.15 como tenías)
 matriz_probabilidades <- modelo_lda@gamma
-
-# Binarizamos: Si la probabilidad del tema es > 0.20, le asignamos un 1
-umbral_topico <- 0.20
-matriz_topicos_fca <- ifelse(matriz_probabilidades > umbral_topico, 1, 0)
-
-# Nombramos las columnas dinámicamente para evitar errores
+matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.15, 1, 0)
 colnames(matriz_topicos_fca) <- paste0("Topico_", 1:ncol(matriz_topicos_fca))
-# ¡NUEVO! 1: Lo pasamos a data.frame para que funcione el join
-df_topicos_fca <- as.data.frame(matriz_topicos_fca)
-# ¡NUEVO! 2: Rescatamos el ID del documento (que el modelo guarda en los rownames)
-# df_topicos_fca$comment_id <- rownames(matriz_probabilidades)
-df_topicos_fca$comment_id <- lda_data_final$comment_id[row_totals > 0]
-```
 
+df_topicos <- as.data.frame(matriz_topicos_fca)
+# Rescatamos los IDs de los comentarios que sobrevivieron al LDA
+indices_que_quedaron <- as.numeric(modelo_lda@documents)
+df_topicos$comment_id <- data_texto$comment_id[indices_que_quedaron]
 
-```{r}
-matriz_sentimientos_fca <- data.frame(
-  comment_id    = data_sentim$comment_id,
-  Sent_Positivo = ifelse(data_sentim$valencia > 0.5, 1, 0),
-  Sent_Negativo = ifelse(data_sentim$valencia < -0.5, 1, 0),
-  Sent_Neutro   = ifelse(data_sentim$valencia >= -0.5 & data_sentim$valencia  <= 0.5, 1, 0)
+# 2. Binarizamos los Sentimientos
+# (Solo si es muy positivo o muy negativo para evitar el ruido del cero)
+df_sentimientos <- data.frame(
+   comment_id    = data_sentim$comment_id,
+   Sent_Positivo = ifelse(data_sentim$valencia > 0.5, 1, 0),
+   Sent_Negativo = ifelse(data_sentim$valencia < -0.5, 1, 0)
 )
 
-```
+# 3. Unimos ambas dimensiones (¡La verdadera integración!)
+datos_fca_completos <- inner_join(df_topicos, df_sentimientos, by = "comment_id")
 
+# Convertimos a matriz matemática quitando la columna ID
+matriz_final_fca <- as.matrix(datos_fca_completos |> select(-comment_id))
+rownames(matriz_final_fca) <- paste0("Doc_", datos_fca_completos$comment_id)
 
+# --- 2. CÁLCULO DE CONCEPTOS E IMPLICACIONES (fcaR) ---
 
+# Creamos el contexto formal
+fc <- FormalContext$new(matriz_final_fca)
 
-```{r}
-datos_fca_completos <- inner_join(df_topicos_fca, matriz_sentimientos_fca, by = "comment_id")
-
-# 5. CREAR LA MATRIZ FORMAL PARA fcaR
-# Quitamos la columna 'comment_id' porque fcaR solo quiere números
-matriz_final <- as.matrix(datos_fca_completos 
-                          |> select(-comment_id))
-
-
-# (Opcional) Nombramos las filas para tenerlo ordenado
-rownames(matriz_fca) <- paste0("Doc_", 1:nrow(matriz_fca))
-
-# Guardamos el resultado final
-saveRDS(matriz_fca, "data/matriz_fca_final.rds")
-```
-
-
-
-```{r}
-fc <- FormalContext$new(matriz_final)
-
-# Calculamos y mostramos las reglas matemáticas
-fc$find_implications()
-
-cat("\n--- REGLAS LÓGICAS EXTRAÍDAS ---\n")
-fc$implications$print()
-```
-{Sent_Positivo, Sent_Negativo} -> {Todo lo demás}.
-¿Por qué te dice que si un comentario es Positivo y Negativo a la vez implica absolutamente todos los tópicos?
-
-Porque en lógica matemática, una premisa falsa implica cualquier cosa. Como binarizaste los sentimientos muy bien, no existe ni un solo comentario en tu base de datos que sea Positivo y Negativo al mismo tiempo. Al ser un escenario imposible (soporte cero), el algoritmo te escupe que implica el resto del universo.
-prueba matemática de que tu matriz de incidencia y tu codificación one-hot de los sentimientos están perfectas. Son mutuamente excluyentes.
-
-
-
-```{r}
-fc$implications$support()
-```
-
-
-
-```{r}
+# Encontramos los conceptos
 fc$find_concepts()
 
-fc$concepts
+# Encontramos las reglas (Implicaciones)
+fc$find_implications()
 
+# Capturamos la salida matemática de las reglas en una variable de texto
+# (Cogemos solo las 20 primeras para no saturar)
+salida_matematica <- capture.output(fc$implications$print())
+texto_reglas <- paste(head(salida_matematica, 20), collapse = "\n")
 
-
-
-cat("\n--- CONCEPTOS CON MÁS DE UN 5% DE SOPORTE ---\n")
-# Imprimimos solo esos conceptos fuertes
-fc$concepts[which(fc$concepts$support() > 0.05)]$print()
+cat("✅ Reglas matemáticas generadas y listas para la IA.\n")
 ```
 
-
-
 ```{r}
-# 1. Calculamos el soporte (porcentaje) de cada concepto
-soportes <- fc$concepts$support()
+# --- 3. TRADUCCIÓN DE REGLAS CON INTELIGENCIA ARTIFICIAL ---
+library(httr)
+library(jsonlite)
 
-# 2. Filtramos: Nos quedamos solo con los conceptos que agrupen a más del 5% de los usuarios
-# (Puedes subirlo al 0.10 si te salen demasiados)
-conceptos_fuertes <- which(soportes > 0.05)
+# Recuperamos la API Key que guardaste en el .Renviron
+mi_api_key <- Sys.getenv("GEMINI_API_KEY")
 
-cat("\n======================================================\n")
-cat("   RESUMEN DE CONCEPTOS FORMALES RELEVANTES (> 5%)    \n")
-cat("======================================================\n\n")
-
-# 3. Extraemos las etiquetas de las columnas (Tus tópicos y sentimientos)
-nombres_atributos <- colnames(matriz_final)
-
-# 4. Bucle para imprimir de forma elegante solo la Intensión y el Soporte
-for (i in conceptos_fuertes) {
-  # Extraemos qué atributos (unos y ceros) forman este concepto
-  atributos_binarios <- fc$concepts$intents()[, i]
+traducir_reglas_fca <- function(reglas_fca, api_key) {
+  # El prompt donde le explicamos a la IA qué significan las variables
+  prompt <- paste(
+    "Eres un sociólogo de datos experto en Reddit. He aplicado Análisis Formal de Conceptos (FCA) y he obtenido las siguientes reglas lógicas matemáticas.",
+    "Tus instrucciones:",
+    "1. Ignora las reglas que no tengan sentido o sean obvias.",
+    "2. Traduce las 3 reglas más interesantes a conclusiones sociológicas claras en español.",
+    "3. Redáctalo en formato de 'Insights' con viñetas, usando un tono académico.",
+    "4. Recuerda que 'Sent_Negativo' y 'Sent_Positivo' indican la carga emocional del comentario.",
+    "\nAquí están las reglas matemáticas:\n", reglas_fca
+  )
   
-  # Nos quedamos con los nombres de los que están a '1'
-  atributos_activos <- nombres_atributos[atributos_binarios == 1]
+  url_gemini <- paste0("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=", api_key)
   
-  # Si el concepto tiene atributos, lo imprimimos (ignoramos el Concepto Universal vacío)
-  if (length(atributos_activos) > 0) {
-    cat(sprintf("Concepto %d:\n", i))
-    cat(sprintf(" - Afecta al: %.1f%% de los comentarios\n", soportes[i] * 100))
-    cat(" - Perfil: {", paste(atributos_activos, collapse = ", "), "}\n\n")
+  cuerpo_peticion <- list(
+    contents = list(list(parts = list(list(text = prompt)))),
+    generationConfig = list(temperature = 0.4)
+  )
+  
+  # Sistema anti-saturación (Retry Loop)
+  for (intento in 1:4) {
+    respuesta <- POST(url = url_gemini, content_type_json(), encode = "json", body = cuerpo_peticion)
+    contenido <- content(respuesta, as = "parsed", type = "application/json")
+    
+    if (is.null(contenido$error)) break
+    
+    if (intento < 4) {
+      cat(sprintf("\n[Aviso] API Ocupada (Intento %d). Esperando 5s...\n", intento))
+      Sys.sleep(5)
+    } else {
+      return("Error en la API. Intenta ejecutar el bloque de nuevo.")
+    }
   }
+  
+  texto_final <- contenido$candidates[[1]]$content$parts[[1]]$text
+  return(trimws(texto_final))
 }
-```
-"el Análisis Formal de Conceptos demuestra que los Tópicos 1, 3 y 4 son temáticas 'seguras' o de consenso, ya que la polaridad negativa es estadísticamente residual".
 
+# Llamamos a la IA y le pasamos nuestras reglas
+cat("\n🤖 Pensando... Traducción de insights en proceso...\n\n")
+insights_sociologicos <- traducir_reglas_fca(texto_reglas, mi_api_key)
+
+# Imprimimos el resultado formateado
+cat(insights_sociologicos)
+```
+
+
+
+# Visualización de retículos de concpetos
 ```{r}
+# --- VISUALIZACIÓN DEL RETÍCULO (DIAGRAMA DE HASSE) ---
+
+# Filtramos para no saturar el gráfico (solo conceptos con > 3% de soporte)
+conceptos_filtrados <- fc$concepts[fc$concepts$support() > 0.05]
+conceptos_filtrados$plot()
+
+# El método plot de fcaR genera un Diagrama de Hasse automático
+# Usamos el motor 'visNetwork' si está disponible para que sea interactivo
 fc$concepts$plot()
+
+fc$plot()
+
+# Interpretación para el TFG:
+# Los nodos superiores representan temas transversales.
+# Los nodos inferiores representan nichos donde los temas y sentimientos se mezclan de forma única.
 ```
-
-
 ```{r}
 library(ggplot2)
 library(dplyr)
 
-# 1. Extraemos los datos del objeto FCA (Solo los > 5%)
+conceptos_fuertes <- which(fc$concepts$support() > 0.05)
+
+# 1. Reconstruimos la tabla resumen (por si no la tenías cargada en memoria)
+resumen_conceptos <- data.frame(
+  ID = conceptos_fuertes,
+  Soporte = fc$concepts$support()[conceptos_fuertes] * 100,
+  Perfil_Logico = sapply(conceptos_fuertes, function(i) {
+    attrs <- colnames(matriz_final_fca)[fc$concepts$intents()[, i] == 1]
+    paste(attrs, collapse = " + ")
+  })
+) |> 
+  arrange(desc(Soporte))
+
+# 2. Nos quedamos con los 10 perfiles principales para que el gráfico respire
+
+
+# Filtramos la tabla resumen para quedarnos SOLO con los cruces lógicos (Conceptos combinados)
+datos_combinados <- resumen_conceptos |> 
+  filter(str_detect(Perfil_Logico, "\\+")) 
+
+# Nos quedamos con los 10 cruces principales
+datos_grafico <- head(datos_combinados, 10)
+
+# (Y a partir de aquí lanzas el mismo código de ggplot de antes, usando este nuevo datos_grafico)
+# 3. Generamos el gráfico nivel TFG
+grafico_fca <- ggplot(datos_grafico, aes(x = reorder(paste("Concepto", ID), Soporte), y = Soporte, fill = Soporte)) +
+  geom_col(color = "black", alpha = 0.85) +
+  
+  # Ponemos el texto de la regla lógica dentro de la barra
+  geom_text(aes(label = Perfil_Logico), y = 0.5, hjust = 0, color = "white", fontface = "bold", size = 4) +
+  
+  coord_flip() +
+  scale_fill_gradient(low = "#4f94d4", high = "#0b2e59") + # Colores serios y académicos
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "Estructura Lógica del Debate (Análisis Formal de Conceptos)",
+    subtitle = "Perfiles temático-emocionales con mayor prevalencia en la comunidad",
+    x = "Concepto Formal (Nicho)",
+    y = "Porcentaje de Comentarios que cumplen la regla (%)"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", margin = margin(b = 10)),
+    axis.text.y = element_text(face = "bold", color = "black")
+  )
+
+# Imprimimos el gráfico
+print(grafico_fca)
+```
+
+
+```{r}
+# Elegimos un concepto interesante (por ejemplo, el concepto 5)
+id_concepto <- 5
+indices_comentarios <- fc$concepts$extents()[, id_concepto]
+
+# Extraemos los comentarios reales de Reddit para ver qué dicen de verdad
+ejemplos_reales <- data_texto$comment[indices_que_quedaron][indices_comentarios == 1]
+head(ejemplos_reales, 3)
+```
+
+
+```{r}
+# Visualizar la matriz de conceptos vs atributos
+library(pheatmap)
+intensiones_matriz <- as.matrix(fc$concepts$intents())
+pheatmap(intensiones_matriz[, conceptos_fuertes], 
+         main = "Mapa de Calor de Perfiles Lógicos",
+         color = c("white", "steelblue"))
+```
+
+
+# Tabla de "Perfiles de Usuario"
+```{r}
+# Creamos una tabla resumen de los "Conceptos Relevantes"
+conceptos_fuertes <- which(fc$concepts$support() > 0.05)
+resumen_conceptos <- data.frame(
+  ID = conceptos_fuertes,
+  Soporte = fc$concepts$support()[conceptos_fuertes] * 100,
+  Perfil_Logico = sapply(conceptos_fuertes, function(i) {
+    attrs <- colnames(matriz_final_fca)[fc$concepts$intents()[, i] == 1]
+    paste(attrs, collapse = " + ")
+  })
+) |> 
+  arrange(desc(Soporte))
+
+# Mostramos los 10 principales perfiles detectados
+knitr::kable(head(resumen_conceptos, 10), 
+             caption = "Perfiles Lógicos extraídos mediante FCA (Integración NLP-Sentimiento)")
+```
+
+
+
+```{r}
+# 1. Extraemos la matriz de probabilidades (Gamma)
+matriz_probabilidades <- modelo_lda@gamma
+
+# 2. Identificamos QUÉ documentos sobrevivieron al modelo
+# El modelo guarda internamente los índices originales de los documentos procesados
+indices_que_quedaron <- as.numeric(modelo_lda@documents)
+
+# 3. Filtramos tus datos originales para que coincidan EXACTAMENTE con el modelo
+# Esto elimina cualquier comentario que el LDA haya ignorado
+data_alineada <- data_texto[indices_que_quedaron, ]
+
+# 4. Ahora sí, binarizamos los tópicos
+umbral <- 0.15
+matriz_binaria <- ifelse(matriz_probabilidades > umbral, 1, 0)
+
+# 5. Asignamos los nombres sin miedo a los NA
+# Usamos el ID del comentario que ya hemos alineado en el paso 3
+rownames(matriz_binaria) <- paste0("Doc_", data_alineada$comment_id)
+colnames(matriz_binaria) <- paste0("Topico_", 1:ncol(matriz_binaria))
+
+# 6. Verificación de seguridad
+# Si esto da 0, hemos vencido a los padres
+sum(is.na(rownames(matriz_binaria)))
+```
+
+```{r}
+# Crear el contexto
+fc <- FormalContext$new(matriz_binaria)
+
+# Calcular conceptos (Agrupaciones de comentarios que comparten temas)
+fc$find_concepts()
+fc$concepts
+
+# Calcular implicaciones (Reglas lógicas: "Si habla de T1, entonces habla de T2")
+fc$find_implications()
+fc$implications
+```
+
+
+```{r}
+# ¿Cuántos tópicos tiene cada comentario de media?
+# Si es cercano a 1, no habrá implicaciones porque los temas no se cruzan.
+print(mean(rowSums(matriz_binaria)))
+
+# Ver el soporte de cada tópico (en qué % de comentarios aparece)
+print(fc$attributes_support())
+```
+
+
+```{r}
+# Extraer datos de conceptos con soporte > 5%
 soportes <- fc$concepts$support()
 conceptos_fuertes <- which(soportes > 0.05)
-nombres_atributos <- colnames(matriz_final)
+nombres_atributos <- colnames(matriz_binaria)
 
-# Creamos un dataframe vacío para ir guardando los datos limpios
-df_visualizacion <- data.frame(Concepto = character(), 
-                               Soporte = numeric(), 
-                               Perfil = character(), 
-                               stringsAsFactors = FALSE)
+df_plot <- data.frame(Concepto = character(), Soporte = numeric(), Perfil = character())
 
-# 2. Llenamos el dataframe con el bucle
 for (i in conceptos_fuertes) {
+  # Extraer qué tópicos forman este concepto
   atributos_binarios <- fc$concepts$intents()[, i]
-  atributos_activos <- nombres_atributos[atributos_binarios == 1]
+  perfil_tematico <- paste(nombres_atributos[atributos_binarios == 1], collapse = " + ")
   
-  if (length(atributos_activos) > 0) {
-    # Unimos los atributos con un salto de línea para que quede bonito en el gráfico
-    perfil_texto <- paste(atributos_activos, collapse = " + ")
-    
-    # Añadimos la fila
-    df_visualizacion <- rbind(df_visualizacion, data.frame(
-      Concepto = paste("C.", i), # C. 4, C. 33...
+  if (nchar(perfil_tematico) > 0) {
+    df_plot <- rbind(df_plot, data.frame(
+      Concepto = paste("C.", i),
       Soporte = soportes[i] * 100,
-      Perfil = perfil_texto
+      Perfil = perfil_tematico
     ))
   }
 }
 
-# 3. PLOT NIVEL TFG
-ggplot(df_visualizacion, aes(x = reorder(Concepto, Soporte), y = Soporte, fill = Soporte)) +
-  geom_col(color = "black", alpha = 0.8) +
-  # Añadimos el texto de los atributos dentro de las barras
-  geom_text(aes(label = Perfil), y = 1, hjust = 0, color = "black", fontface = "bold", size = 3.5) +
-  coord_flip() + # Lo ponemos en horizontal para que se lea mejor
+# Gráfico de barras horizontales
+ggplot(df_plot, aes(x = reorder(Concepto, Soporte), y = Soporte, fill = Soporte)) +
+  geom_col() +
+  geom_text(aes(label = Perfil), hjust = -0.1, size = 3) +
+  coord_flip() +
   theme_minimal() +
-  scale_fill_gradient(low = "lightblue", high = "dodgerblue4") +
-  labs(title = "Estructura Lógica del Debate (Análisis Formal de Conceptos)",
-       subtitle = "Conceptos Formales con más del 5% de soporte en la comunidad",
-       x = "Concepto Formal",
-       y = "Porcentaje de Comentarios que lo cumplen (%)") +
-  theme(legend.position = "none",
-        plot.title = element_text(face = "bold", size = 14),
-        axis.text.y = element_text(face = "bold"))
+  labs(title = "Estructura Temática por Comentario",
+       x = "ID Concepto Formal",
+       y = "% de Comentarios (Soporte)")
 ```
 
------------------------------------------------
+<!-- ```{r} -->
+<!-- matriz_probabilidades <- modelo_lda@gamma -->
+
+<!-- # Binarizamos: Si la probabilidad del tema es > 0.20, le asignamos un 1 -->
+<!-- umbral_topico <- 0.20 -->
+<!-- matriz_topicos_fca <- ifelse(matriz_probabilidades > umbral_topico, 1, 0) -->
+
+<!-- # Nombramos las columnas dinámicamente para evitar errores -->
+<!-- colnames(matriz_topicos_fca) <- paste0("Topico_", 1:ncol(matriz_topicos_fca)) -->
+<!-- # ¡NUEVO! 1: Lo pasamos a data.frame para que funcione el join -->
+<!-- df_topicos_fca <- as.data.frame(matriz_topicos_fca) -->
+<!-- # ¡NUEVO! 2: Rescatamos el ID del documento (que el modelo guarda en los rownames) -->
+<!-- # df_topicos_fca$comment_id <- rownames(matriz_probabilidades) -->
+<!-- df_topicos_fca$comment_id <- lda_data_final$comment_id[row_totals > 0] -->
+<!-- ``` -->
 
 
-```{r}
-# Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico)
-# df_gamma <- tidy(modelo_lda, matrix = "gamma")
-# 
-# # Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario
-# # Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data'
-# data_texto$id_numeric <- as.character(1:nrow(data_texto))
-# 
-# df_hilos_topics <- df_gamma |>
-#   left_join(data_texto |> select(id_numeric, url), by = c("document" = "id_numeric")) |>
-#   group_by(url, topic) |>
-#   summarise(gamma_promedio = mean(gamma), .groups = 'drop')
-# 
-# # 3. Crear la matriz para el FCA (Hilos x Tópicos)
-# matriz_para_fca <- df_hilos_topics |>
-#   pivot_wider(names_from = topic, values_from = gamma_promedio) |>
-#   column_to_rownames("url")
-# 
-# # 4. Binarizar: Consideramos que un hilo "trata" de un tópico si su probabilidad media es > 0.1
-# # (Puedes ajustar este 0.1 según veas los resultados)
-# matriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1
-# 
-# # 5. Ahora el FCA será instantáneo
-# fc <- FormalContext$new(matriz_booleana)
-# fc$find_concepts()
-# plot(fc$concepts)
-```
+<!-- ```{r} -->
+<!-- matriz_sentimientos_fca <- data.frame( -->
+<!--   comment_id    = data_sentim$comment_id, -->
+<!--   Sent_Positivo = ifelse(data_sentim$valencia > 0.5, 1, 0), -->
+<!--   Sent_Negativo = ifelse(data_sentim$valencia < -0.5, 1, 0), -->
+<!--   Sent_Neutro   = ifelse(data_sentim$valencia >= -0.5 & data_sentim$valencia  <= 0.5, 1, 0) -->
+<!-- ) -->
+
+<!-- ``` -->
 
 
 
 
-```{r}
-# matriz_probabilidades <- modelo_lda@gamma
-# 
-# # 3. BINARIZAS LOS TÓPICOS para el FCA (Ej: Si la prob > 0.20, ponemos un 1)
-# matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0)
-# # Binarizamos igual que antes
-# matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0)
-# 
-# # Leemos cuántas columnas (tópicos) tiene tu modelo realmente
-# num_topicos <- ncol(matriz_topicos_fca)
-# 
-# # Asignamos los nombres de forma dinámica
-# colnames(matriz_topicos_fca) <- paste0("Topico_", 1:num_topicos)
-# 
-# # Comprobamos que ha funcionado echando un ojo a las primeras filas
-# head(matriz_topicos_fca)
-```
+<!-- ```{r} -->
+<!-- datos_fca_completos <- inner_join(df_topicos_fca, matriz_sentimientos_fca, by = "comment_id") -->
+
+<!-- # 5. CREAR LA MATRIZ FORMAL PARA fcaR -->
+<!-- # Quitamos la columna 'comment_id' porque fcaR solo quiere números -->
+<!-- matriz_final <- as.matrix(datos_fca_completos  -->
+<!--                           |> select(-comment_id)) -->
+
+
+<!-- # (Opcional) Nombramos las filas para tenerlo ordenado -->
+<!-- rownames(matriz_fca) <- paste0("Doc_", 1:nrow(matriz_fca)) -->
+
+<!-- # Guardamos el resultado final -->
+<!-- saveRDS(matriz_fca, "data/matriz_fca_final.rds") -->
+<!-- ``` -->
+
+
+
+<!-- ```{r} -->
+<!-- fc <- FormalContext$new(matriz_final) -->
+
+<!-- # Calculamos y mostramos las reglas matemáticas -->
+<!-- fc$find_implications() -->
+
+<!-- cat("\n--- REGLAS LÓGICAS EXTRAÍDAS ---\n") -->
+<!-- fc$implications$print() -->
+<!-- ``` -->
+<!-- {Sent_Positivo, Sent_Negativo} -> {Todo lo demás}. -->
+<!-- ¿Por qué te dice que si un comentario es Positivo y Negativo a la vez implica absolutamente todos los tópicos? -->
+
+<!-- Porque en lógica matemática, una premisa falsa implica cualquier cosa. Como binarizaste los sentimientos muy bien, no existe ni un solo comentario en tu base de datos que sea Positivo y Negativo al mismo tiempo. Al ser un escenario imposible (soporte cero), el algoritmo te escupe que implica el resto del universo. -->
+<!-- prueba matemática de que tu matriz de incidencia y tu codificación one-hot de los sentimientos están perfectas. Son mutuamente excluyentes. -->
+
+
+
+<!-- ```{r} -->
+<!-- fc$implications$support() -->
+<!-- ``` -->
+
+
+
+<!-- ```{r} -->
+<!-- fc$find_concepts() -->
+
+<!-- fc$concepts -->
+
+
+
+
+<!-- cat("\n--- CONCEPTOS CON MÁS DE UN 5% DE SOPORTE ---\n") -->
+<!-- # Imprimimos solo esos conceptos fuertes -->
+<!-- fc$concepts[which(fc$concepts$support() > 0.05)]$print() -->
+<!-- ``` -->
+
+
+
+<!-- ```{r} -->
+<!-- # 1. Calculamos el soporte (porcentaje) de cada concepto -->
+<!-- soportes <- fc$concepts$support() -->
+
+<!-- # 2. Filtramos: Nos quedamos solo con los conceptos que agrupen a más del 5% de los usuarios -->
+<!-- # (Puedes subirlo al 0.10 si te salen demasiados) -->
+<!-- conceptos_fuertes <- which(soportes > 0.05) -->
+
+<!-- cat("\n======================================================\n") -->
+<!-- cat("   RESUMEN DE CONCEPTOS FORMALES RELEVANTES (> 5%)    \n") -->
+<!-- cat("======================================================\n\n") -->
+
+<!-- # 3. Extraemos las etiquetas de las columnas (Tus tópicos y sentimientos) -->
+<!-- nombres_atributos <- colnames(matriz_final) -->
+
+<!-- # 4. Bucle para imprimir de forma elegante solo la Intensión y el Soporte -->
+<!-- for (i in conceptos_fuertes) { -->
+<!--   # Extraemos qué atributos (unos y ceros) forman este concepto -->
+<!--   atributos_binarios <- fc$concepts$intents()[, i] -->
+
+<!--   # Nos quedamos con los nombres de los que están a '1' -->
+<!--   atributos_activos <- nombres_atributos[atributos_binarios == 1] -->
+
+<!--   # Si el concepto tiene atributos, lo imprimimos (ignoramos el Concepto Universal vacío) -->
+<!--   if (length(atributos_activos) > 0) { -->
+<!--     cat(sprintf("Concepto %d:\n", i)) -->
+<!--     cat(sprintf(" - Afecta al: %.1f%% de los comentarios\n", soportes[i] * 100)) -->
+<!--     cat(" - Perfil: {", paste(atributos_activos, collapse = ", "), "}\n\n") -->
+<!--   } -->
+<!-- } -->
+<!-- ``` -->
+<!-- "el Análisis Formal de Conceptos demuestra que los Tópicos 1, 3 y 4 son temáticas 'seguras' o de consenso, ya que la polaridad negativa es estadísticamente residual". -->
+
+<!-- ```{r} -->
+<!-- fc$concepts$plot() -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- library(ggplot2) -->
+<!-- library(dplyr) -->
+
+<!-- # 1. Extraemos los datos del objeto FCA (Solo los > 5%) -->
+<!-- soportes <- fc$concepts$support() -->
+<!-- conceptos_fuertes <- which(soportes > 0.05) -->
+<!-- nombres_atributos <- colnames(matriz_final) -->
+
+<!-- # Creamos un dataframe vacío para ir guardando los datos limpios -->
+<!-- df_visualizacion <- data.frame(Concepto = character(),  -->
+<!--                                Soporte = numeric(),  -->
+<!--                                Perfil = character(),  -->
+<!--                                stringsAsFactors = FALSE) -->
+
+<!-- # 2. Llenamos el dataframe con el bucle -->
+<!-- for (i in conceptos_fuertes) { -->
+<!--   atributos_binarios <- fc$concepts$intents()[, i] -->
+<!--   atributos_activos <- nombres_atributos[atributos_binarios == 1] -->
+
+<!--   if (length(atributos_activos) > 0) { -->
+<!--     # Unimos los atributos con un salto de línea para que quede bonito en el gráfico -->
+<!--     perfil_texto <- paste(atributos_activos, collapse = " + ") -->
+
+<!--     # Añadimos la fila -->
+<!--     df_visualizacion <- rbind(df_visualizacion, data.frame( -->
+<!--       Concepto = paste("C.", i), # C. 4, C. 33... -->
+<!--       Soporte = soportes[i] * 100, -->
+<!--       Perfil = perfil_texto -->
+<!--     )) -->
+<!--   } -->
+<!-- } -->
+
+<!-- # 3. PLOT NIVEL TFG -->
+<!-- ggplot(df_visualizacion, aes(x = reorder(Concepto, Soporte), y = Soporte, fill = Soporte)) + -->
+<!--   geom_col(color = "black", alpha = 0.8) + -->
+<!--   # Añadimos el texto de los atributos dentro de las barras -->
+<!--   geom_text(aes(label = Perfil), y = 1, hjust = 0, color = "black", fontface = "bold", size = 3.5) + -->
+<!--   coord_flip() + # Lo ponemos en horizontal para que se lea mejor -->
+<!--   theme_minimal() + -->
+<!--   scale_fill_gradient(low = "lightblue", high = "dodgerblue4") + -->
+<!--   labs(title = "Estructura Lógica del Debate (Análisis Formal de Conceptos)", -->
+<!--        subtitle = "Conceptos Formales con más del 5% de soporte en la comunidad", -->
+<!--        x = "Concepto Formal", -->
+<!--        y = "Porcentaje de Comentarios que lo cumplen (%)") + -->
+<!--   theme(legend.position = "none", -->
+<!--         plot.title = element_text(face = "bold", size = 14), -->
+<!--         axis.text.y = element_text(face = "bold")) -->
+<!-- ``` -->
+
+<!-- ----------------------------------------------- -->
+
+
+<!-- ```{r} -->
+<!-- # Extraer la matriz gamma (probabilidad de que cada documento pertenezca a cada tópico) -->
+<!-- # df_gamma <- tidy(modelo_lda, matrix = "gamma") -->
+<!-- #  -->
+<!-- # # Unir con los datos originales para saber a qué Hilo (URL) pertenece cada comentario -->
+<!-- # # Asumimos que 'document' en gamma coincide con el orden/ID de 'clean_data' -->
+<!-- # data_texto$id_numeric <- as.character(1:nrow(data_texto)) -->
+<!-- #  -->
+<!-- # df_hilos_topics <- df_gamma |> -->
+<!-- #   left_join(data_texto |> select(id_numeric, url), by = c("document" = "id_numeric")) |> -->
+<!-- #   group_by(url, topic) |> -->
+<!-- #   summarise(gamma_promedio = mean(gamma), .groups = 'drop') -->
+<!-- #  -->
+<!-- # # 3. Crear la matriz para el FCA (Hilos x Tópicos) -->
+<!-- # matriz_para_fca <- df_hilos_topics |> -->
+<!-- #   pivot_wider(names_from = topic, values_from = gamma_promedio) |> -->
+<!-- #   column_to_rownames("url") -->
+<!-- #  -->
+<!-- # # 4. Binarizar: Consideramos que un hilo "trata" de un tópico si su probabilidad media es > 0.1 -->
+<!-- # # (Puedes ajustar este 0.1 según veas los resultados) -->
+<!-- # matriz_booleana <- as.matrix(matriz_para_fca > 0.1) * 1 -->
+<!-- #  -->
+<!-- # # 5. Ahora el FCA será instantáneo -->
+<!-- # fc <- FormalContext$new(matriz_booleana) -->
+<!-- # fc$find_concepts() -->
+<!-- # plot(fc$concepts) -->
+<!-- ``` -->
+
+
+
+
+<!-- ```{r} -->
+<!-- # matriz_probabilidades <- modelo_lda@gamma -->
+<!-- #  -->
+<!-- # # 3. BINARIZAS LOS TÓPICOS para el FCA (Ej: Si la prob > 0.20, ponemos un 1) -->
+<!-- # matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0) -->
+<!-- # # Binarizamos igual que antes -->
+<!-- # matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.20, 1, 0) -->
+<!-- #  -->
+<!-- # # Leemos cuántas columnas (tópicos) tiene tu modelo realmente -->
+<!-- # num_topicos <- ncol(matriz_topicos_fca) -->
+<!-- #  -->
+<!-- # # Asignamos los nombres de forma dinámica -->
+<!-- # colnames(matriz_topicos_fca) <- paste0("Topico_", 1:num_topicos) -->
+<!-- #  -->
+<!-- # # Comprobamos que ha funcionado echando un ojo a las primeras filas -->
+<!-- # head(matriz_topicos_fca) -->
+<!-- ``` -->
 
 
 
 
 
-```{r}
-# fc_data <- FormalContext$new(matriz_fca)
-```
+<!-- ```{r} -->
+<!-- # fc_data <- FormalContext$new(matriz_fca) -->
+<!-- ``` -->
 
 
-```{r}
-# fc_data$find_concepts()
+<!-- ```{r} -->
+<!-- # fc_data$find_concepts() -->
 
-# fc_data$concepts
-```
+<!-- # fc_data$concepts -->
+<!-- ``` -->
 
-```{r}
-# fc_data$find_implications()
-# 
-# fc_data$implications
+<!-- ```{r} -->
+<!-- # fc_data$find_implications() -->
+<!-- #  -->
+<!-- # fc_data$implications -->
 
-```
+<!-- ``` -->
 
