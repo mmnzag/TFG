@@ -264,8 +264,11 @@ saveRDS(modelo_lda, "data/modelo_lda.rds")
 
 # Nombrado de tópicos
 En esta sección usaremos la API de Gemini para nombrar cada tópico. 
+
+
+
+version 1
 ```{r}
-# 1. Definimos tu API KEY (Sustituye por la tuya real y NUNCA la subas a GitHub)
 mi_api_key <- Sys.getenv("GEMINI_API_KEY")
 
 # 2. Preparamos las palabras de cada tópico en formato texto
@@ -274,6 +277,8 @@ temas_palabras <- apply(terminos_top, 2, paste, collapse = ", ")
 
 # 3. Creamos la función que conecta con el LLM
 nombrar_tema_gemini <- function(palabras, api_key) {
+  
+  Sys.sleep(30)
   prompt <- paste("Eres un analista de datos analizando Reddit. Basado en este grupo de palabras clave en inglés extraídas con LDA, genera un título corto (máximo 4 palabras) ESTRICTAMENTE EN INGLÉS que describa de qué trata este tema. Responde únicamente con el título, sin comillas ni explicaciones. Palabras:", palabras)  
   # La URL lleva la clave integrada
   # Fíjate que ahora dice gemini-2.5-flash en lugar de 1.5
@@ -311,6 +316,7 @@ nombrar_tema_gemini <- function(palabras, api_key) {
   # Extraemos el texto de la respuesta de Gemini
   texto_final <- contenido$candidates[[1]]$content$parts[[1]]$text
   
+  
   # Limpiamos posibles saltos de línea al final del texto
   return(trimws(texto_final))
 }
@@ -325,6 +331,70 @@ nombres_temas <- setNames(nombres_ia, as.character(1:6))
 print(nombres_temas)
 
 colnames(terminos_top) <- nombres_temas
+```
+```{r}
+mi_api_key <- Sys.getenv("GROQ_API_KEY")
+
+# 2. Preparamos las palabras de cada tópico en formato texto
+# Esto convierte la matriz de términos en cadenas, ej: "people, job, time..."
+temas_palabras <- apply(terminos_top, 2, paste, collapse = ", ")
+nombrar_tema_ia <- function(palabras, api_key) {
+  
+  # Groq es muy rápido, pero si haces muchas peticiones seguidas, 
+  # un pequeño sleep evita bloqueos de Rate Limit.
+  Sys.sleep(1) 
+  
+  url_ia <- "https://api.groq.com/openai/v1/chat/completions"
+  
+  prompt <- paste(
+    "Eres un analista de datos analizando Reddit.",
+    "Basado en este grupo de palabras clave en inglés extraídas con LDA, genera un título corto (máximo 4 palabras) ESTRICTAMENTE EN INGLÉS que describa de qué trata este tema. No repitas tema",
+    "Responde únicamente con el título, sin comillas ni explicaciones.",
+    "Palabras:", palabras
+  )
+  
+  # Estructura JSON para Groq
+  cuerpo_peticion <- list(
+    model = "llama-3.3-70b-versatile",
+    messages = list(
+      list(role = "user", content = prompt)
+    ),
+    temperature = 0.3
+  )
+  
+  # Hacemos la llamada usando httr2 (más moderno y seguro)
+  respuesta <- request(url_ia) |>
+    req_headers(
+      `Content-Type` = "application/json",
+      `Authorization` = paste("Bearer", api_key)
+    ) |>
+    req_body_json(cuerpo_peticion) |>
+    req_error(is_error = function(resp) FALSE) |> 
+    req_perform()
+  
+  # Extracción de datos
+  if (resp_status(respuesta) == 200) {
+    contenido <- resp_body_json(respuesta)
+    texto_final <- contenido$choices[[1]]$message$content
+    return(trimws(texto_final))
+    
+  } else {
+    # Manejo de errores
+    contenido_err <- resp_body_json(respuesta)
+    cat("\n❌ ERROR DE IA (Groq):\n")
+    cat(contenido_err$error$message, "\n")
+    return("Error en API")
+  }
+}
+
+nombres_ia <- sapply(temas_palabras, nombrar_tema_ia, api_key = mi_api_key)
+# 
+# # 5. Sustituimos tus nombres manuales por los generados
+nombres_temas <- setNames(nombres_ia, as.character(1:6))
+print(nombres_temas)
+
+colnames(terminos_top) <- nombres_temas
+
 ```
 
 

@@ -53,7 +53,7 @@ El proceso reduce las 6.300 interacciones iniciales a 6.063 aristas únicas que 
 
 Para trabajar con datos relevantes, se creará un subgrafo basado en el número de interacciones (grado) de cada nodo. 
 
-Para ello, se vemos la distribución de los grado y como estamos trabajando con un gran volumen de datos, los escalamos con una transformación logarítmica en el eje X.
+Para ello, vemos la distribución de los grado y como estamos trabajando con un gran volumen de datos, los escalamos con una transformación logarítmica en el eje X.
 ```{r}
 # Extraer los grados del grafo original (antes de filtrar)
 V(grafo_reddit)$degree <- degree(grafo_reddit, mode = "all")
@@ -449,6 +449,8 @@ knitr::kable(
 )
 
 saveRDS(tabla_roles, "data/tabla_roles.rds") # guardamos para las cámaras de eco
+
+tabla_roles|>select(-c("Usuario")) |> filter(Rol %in% c("Broker (Conector)", "Autoridad (Referencia)", "Hub (Difusor activo)")) |> arrange(desc(PageRank)) |> head(15)
 
 ```
 Este análisis trasciende el volumen bruto de mensajes para categorizar a los usuarios según su función sociométrica mediante el uso de percentiles estadísticos. El algoritmo clasifica a los actores en tres roles críticos: "Autoridades", definidos por su prestigio y capacidad de referencia según PageRank; "Brokers", actores con alta intermediación que operan como puentes estratégicos entre comunidades aisladas; y "Hubs", perfiles con una alta tasa de emisión de contenido. Esta taxonomía permite perfilar la arquitectura jerárquica de la red, diferenciando con precisión a los líderes de opinión de los meros difusores activos de información.

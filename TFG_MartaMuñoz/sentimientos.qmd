@@ -16,11 +16,11 @@ format:
 
 # Extracción y procesamiento 
 ```{r}
-library(tidyverse) 
-library(syuzhet) # analisis sentimiento
-library(scales) 
-library(zoo)
-library(igraph)
+library(tidyverse)  # Manipulación de datos y visualización
+library(syuzhet)    # Extracción de sentimientos y emociones
+library(scales)     # Formateo de escalas en gráficos
+library(zoo)        # Cálculo de medias móviles
+library(viridis)    # Paletas de colores accesibles
 
 textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
 data_texto <- readRDS("data/data_texto_procesado.rds")
@@ -28,12 +28,13 @@ tabla_roles <- readRDS("data/tabla_roles.rds")
 ```
 
 
+Para la cuantificación de los estados emocionales presentes en r/technology, se empleó el algoritmo NRC Sentiment Lexicon a través de la librería syuzhet. A diferencia de los análisis binarios (positivo/negativo), este método permite descomponer el discurso en ocho emociones primarias: anger, anticipation, disgust, fear, joy, sadness, surprise y trust.
+
+Los datos fueron normalizados mediante la creación de una métrica de Valencia Neta, definida como la diferencia aritmética entre los términos positivos y negativos de cada intervención. Asimismo, se aplicó una transformación logarítmica (log1p) a la variable score, permitiendo así un análisis estadístico más robusto frente a la naturaleza altamente sesgada de la popularidad en Reddit (donde pocos posts concentran la gran mayoría de los votos).
 ```{r}
 sentimientos_raw <- get_nrc_sentiment(textos_sentimiento$texto_sentimiento, language = "english")
-```
 
 
-```{r}
 data_con_sentim <- cbind(data_texto, sentimientos_raw) |>
   mutate(
     valencia = positive - negative,
@@ -41,11 +42,6 @@ data_con_sentim <- cbind(data_texto, sentimientos_raw) |>
     log_score = log1p(score)
   )
 
-# Agrupamos los resultados para ver el total del debate
-# totales_sentimiento <- data.frame(
-#   emocion = names(sentimientos),
-#   valor = colSums(sentimientos)
-# )
 totales_emociones <- sentimientos_raw |>
   summarise(across(everything(), sum)) |>
   pivot_longer(cols = everything(), names_to = "emocion", values_to = "valor") |>
@@ -58,53 +54,6 @@ totales_emociones <- sentimientos_raw |>
 
 # Visualización
 ```{r}
-# Creamos un gráfico de barras limpio y claro
-# grafico_sentimientos <- ggplot(totales_sentimiento, aes(x = reorder(emocion, valor), y = valor, fill = emocion)) +
-#   geom_col(show.legend = FALSE) +
-#   coord_flip() + # Barras horizontales para que se lean bien los nombres
-#   scale_fill_viridis_d(option = "turbo") +
-#   theme_minimal() +
-#   labs(
-#     title = "Emociones en r/technology (Data Science)",
-#     subtitle = "Análisis de sentimientos con el diccionario NRC",
-#     x = "Emoción",
-#     y = "Frecuencia"
-#   )
-
-# grafico_sentimientos <- 
-#   # totales_sentimiento |>
-#   totales_emociones |>
-#   mutate(emocion = str_to_title(emocion)) |>
-#   ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
-#   geom_col() +
-#   coord_flip() +
-#   scale_fill_viridis_c(option = "mako") + 
-#   theme_minimal(base_size = 12) +
-#   labs(
-#     title = "Distribución de Perfiles Emocionales",
-#     subtitle = "Basado en comentarios de r/technology",
-#     x = NULL, 
-#     y = "Frecuencia Acumulada",
-#     caption = "Fuente: API de Reddit | Diccionario NRC"
-#   )
-# 
-# # Mostramos el gráfico
-# print(grafico_sentimientos)
-
-
-# ggplot(totales_emociones, aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
-#   geom_col(show.legend = FALSE) +
-#   coord_flip() +
-#   scale_fill_viridis_c(option = "mako") +
-#   theme_minimal(base_size = 12) +
-#   labs(
-#     title = "Distribución de Emociones en r/technology",
-#     subtitle = "Análisis basado en el léxico NRC",
-#     x = NULL,
-#     y = "Intensidad Acumulada",
-#     caption = "Fuente: Elaboración propia a partir de datos de Reddit"
-#   )
-
 totales_emociones |>
   mutate(emocion = str_to_title(emocion)) |> 
   ggplot(aes(x = reorder(emocion, valor), y = valor, fill = valor)) +
@@ -123,30 +72,12 @@ totales_emociones |>
 # Guardado de alta calidad para el documento final
 # ggsave("grafico_emociones_tfg.png", grafico_final, width = 8, height = 6, dpi = 300)
 ```
+En esta primera fase, los resultados revelan que el discurso de la comunidad está fuertemente anclado en la Confianza (Trust) y la Anticipación (Anticipation), lo cual es muy característico de los ecosistemas financieros donde el sentimiento alcista y la expectativa por nuevos proyectos o actualizaciones de red (como "halvings" o "forks") dictan la narrativa. Sin embargo, la presencia notable de Miedo (Fear) y Tristeza (Sadness) en el perfil emocional sugiere que el análisis ha captado también los periodos de volatilidad o "FUD" (miedo, incertidumbre y duda) inherentes al mercado. A partir de este diagnóstico emocional global, el siguiente paso consistirá en cruzar estos estados psicológicos con la métrica de Score, para determinar si la euforia o el pánico son los motores que realmente impulsan la viralidad de los posts, o si, por el contrario, la popularidad en el subreddit se mantiene ajena a la carga emocional del mensaje.
 
 
 # Análisis Estadístico: Valencia vs. Score
 
-```{r}
-# # Unimos las columnas de sentimiento con el dataframe original
-# # Asumiendo que 'textos_sentimiento' es tu dataframe limpio
-# data_con_sentimiento <- cbind(data_texto, sentimientos)
-# 
-# # Calculamos una métrica de "Valencia" (Positivo - Negativo)
-# data_con_sentimiento <- data_con_sentimiento |>
-#   mutate(valencia = positive - negative)
-# 
-# # Gráfico de dispersión: Valencia vs Score
-# ggplot(data_con_sentimiento, aes(x = valencia, y = log1p(score))) +
-#   geom_jitter(alpha = 0.3, color = "midnightblue") +
-#   geom_smooth(method = "lm", color = "red") +
-#   theme_minimal() +
-#   labs(title = "Relación entre Sentimiento y Votos (Score)",
-#        subtitle = "Uso de log(score) para manejar la dispersión",
-#        x = "Valencia (Netamente Positivo <-> Netamente Negativo)",
-#        y = "Popularidad (log Score)")
-```
-
+Esta segunda etapa del análisis se centra en la contrastación estadística entre la carga afectiva del discurso y su repercusión social dentro de la plataforma. El objetivo es determinar si existe un sesgo de respuesta en la comunidad de criptomonedas, evaluando si los mensajes con una polaridad extrema (ya sea euforia alcista o pánico bajista) logran captar una mayor atención en forma de votos, o si la popularidad del contenido se distribuye de manera uniforme independientemente del tono emocional empleado.
 
 ```{r}
 
@@ -170,19 +101,20 @@ ggplot(data_con_sentim, aes(x = valencia, y = score)) +
     caption = label_cor
   )
 
-```
-
-Corr nula -> la carga emocional no garantiza éxito del post
-La craga se concentra en en 0 -> comentarios eixtosos informativos o descriptivos. Popularidad indep del tono emocioal
-
-
-
-```{r}
 saveRDS(data_con_sentim, "data/data_sentim.rds")
+
 ```
+
+<!-- Corr nula -> la carga emocional no garantiza éxito del post -->
+<!-- La craga se concentra en en 0 -> comentarios eixtosos informativos o descriptivos. Popularidad indep del tono emocioal -->
+
+Los resultados indican una ausencia de correlación lineal o monótona significativa entre el sentimiento y la popularidad, con un coeficiente de Spearman de apenas 0.029. La línea de tendencia naranja se mantiene prácticamente horizontal, lo que sugiere que en la comunidad de criptomonedas analizada, la probabilidad de que un post sea muy votado no depende de si el mensaje es positivo o negativo. Se observa una gran concentración de la actividad en la neutralidad (valencia 0), lo que implica que el contenido informativo o técnico es el estándar de la conversación, y aunque existen posts virales con alta carga emocional, estos son excepciones estadísticas y no la norma del comportamiento de voto de los usuarios.
+
 
 
 # Análisis Temporal con Media Móvil
+
+Esta tercera fase del análisis tiene como objetivo observar cómo fluctúa el estado de ánimo de la comunidad de criptomonedas a lo largo del tiempo. Dado que los datos diarios presentan una alta volatilidad (ruido), se aplica una técnica de suavizado para identificar la tendencia subyacente del mercado, permitiendo detectar periodos de optimismo persistente o fases de desánimo vinculadas a la evolución del sector cripto.
 ```{r}
 data_temporal <- data_con_sentim |>
   mutate(fecha = as.Date(date)) |>
@@ -204,17 +136,20 @@ ggplot(data_temporal, aes(x = fecha)) +
   )
 ```
 
-El sentimiento medio se mantiene estable cerca de la neutralidad, con excepción de un evento de alta negatividad detectado el 20 de febrero, donde la valencia media cayó a -4, indicando una respuesta colectiva de rechazo o crítica ante un suceso externo
+El análisis temporal revela una tendencia predominantemente neutral, oscilando con frecuencia alrededor del eje cero, lo que refleja la naturaleza reactiva de la comunidad de criptomonedas. Se destaca un episodio de fuerte sentimiento negativo hacia finales de diciembre, donde la valencia media cae drásticamente, sugiriendo una respuesta colectiva a un evento de mercado adverso o noticia regulatoria negativa. Posteriormente, se observa una recuperación gradual hacia la neutralidad, lo que indica que, a pesar de los picos de desánimo, el discurso tiende a estabilizarse rápidamente, evitando estados prolongados de euforia o pánico en el horizonte temporal analizado.
 
 
-# Perfiles emocionales 
+# Perfiles emocionales
+
+Esta sección del análisis se orienta a la segmentación temática para entender cómo varían los sentimientos según el contexto específico de cada discusión dentro del subreddit de criptomonedas. El objetivo es desglosar la métrica global y demostrar que la comunidad no reacciona de forma uniforme, sino que cada evento (noticias regulatorias, movimientos de "ballenas" o actualizaciones de proyectos) genera un perfil psicológico distintivo y cuantificable.
 
 ```{r}
 # Agrupamos por título de hilo (usando la URL o título corto)
 comparativa_hilos <- data_con_sentim |>
   group_by(url) |> # O el nombre corto que creamos antes
-  summarise(across(c(trust, fear, joy, sadness, anger), mean)) |>
-  pivot_longer(cols = -url, names_to = "emocion", values_to = "media")
+  summarise(across(c(trust, fear, joy, sadness, anger), mean))|>
+  pivot_longer(cols = -url, names_to = "emocion", values_to = "media") |>
+  filter(media !=0) 
 
 ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   geom_col() +
@@ -223,11 +158,11 @@ ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   theme(legend.position = "none", strip.text = element_text(size = 7)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
 ```
-Trust es la emoción más alta en casi todos los hilos seleccionados. Esto es muy positivo para una comunidad tecnológica, indicando credibilidad en las fuentes o en las opiniones compartidas.
+La visualización extendida por hilos revela patrones de comportamiento altamente heterogéneos que validan la sensibilidad del léxico NRC ante diferentes narrativas cripto. Destacan hilos con una Confianza (Trust) excepcionalmente alta (valores cercanos a 4), que suelen coincidir con discusiones técnicas o institucionales estables. En contraste, otros paneles muestran una distribución equitativa entre Miedo (Fear) e Ira (Anger), característicos de debates sobre regulaciones o hacks. Esta fragmentación del sentimiento demuestra que el "ruido" aparente en el análisis global es, en realidad, una suma de reacciones coherentes a estímulos informativos específicos, permitiendo concluir que la comunidad de criptomonedas en Reddit procesa la información de manera racional y emocionalmente ajustada al tipo de noticia recibida.
 
 
 
-# 5. Integración SNA-NLP: Detección de Cámaras de Eco
+# Integración SNA-NLP: Detección de Cámaras de Eco
 
 Una vez analizada la estructura de la red (SNA) y la carga emocional de los mensajes (NLP), procedemos a cruzar ambas dimensiones para responder a una de las preguntas de investigación: ¿Existen cámaras de eco en esta comunidad de Reddit?
 
@@ -286,7 +221,411 @@ ggplot(data_echo, aes(x = as.factor(Comunidad), y = valencia, fill = as.factor(C
     y = "Valencia (Negativo <---> Positivo)"
   )
 ```
-El análisis de violines revela que la comunidad 3 es la más optimista respecto a la IA (sentimiento medio de 0.37), mientras que la comunidad 2 es la más escéptica (0.13). Sin embargo, el índice de homogeneidad muestra que a medida que las comunidades crecen en número de usuarios (Clústeres 1, 2 y 3), la polarización individual aumenta, como reflejan las colas extendidas en el eje de valencia. Por el contrario, los grupos más pequeños (Clúster 6) presentan una mayor cohesión interna, sugiriendo la formación de micro-cámaras de eco donde el sentimiento es más uniforme
+Los resultados de la integración SNA-NLP descartan la presencia de cámaras de eco emocionales fuertemente polarizadas en las comunidades analizadas. Tal y como revela la visualización, la media aritmética del sentimiento (representada por el rombo rojo) se sitúa casi exactamente en la neutralidad absoluta (cero) para los seis clústeres principales detectados por el algoritmo. Además, la amplitud central de los gráficos de violín y la dispersión simétrica de los usuarios evidencian que todos los grupos comparten una arquitectura de debate muy similar, concentrando sus interacciones en el intercambio de información objetiva. Esto demuestra que, si bien la red se fragmenta en distintas subcomunidades estructurales (probablemente divididas por el interés en altcoins específicas o ecosistemas tecnológicos distintos), ninguna de ellas se aísla de forma sectaria para retroalimentar una narrativa exclusivamente alcista o bajista, manteniendo un equilibrio racional transversal a toda la plataforma.
 
 
+
+# Comparación con la IA
+```{r}
+# =========================================================================
+# TFG: COMPARATIVA DE SENTIMIENTO - ALGORITMO CLÁSICO (NRC) VS IA (GEMINI)
+# =========================================================================
+
+# 1. LIBRERÍAS NECESARIAS -------------------------------------------------
+library(tidyverse)
+library(httr2)    # Para hacer peticiones a la API de Gemini
+library(jsonlite) # Para procesar la respuesta de la IA
+library(scales)
+library(zoo)
+
+# Configura tu clave de API (Sustituye por tu clave real obtenida en Google AI Studio)
+# Sys.setenv(GEMINI_API_KEY = "TU_CLAVE_API_AQUI")
+
+# 2. FUNCIÓN PARA CONSULTAR A GEMINI --------------------------------------
+# Creamos una función que envía el texto a Gemini y fuerza una respuesta en JSON
+analizar_con_ia <- function(texto) {
+  
+  api_key <- Sys.getenv("GROQ_API_KEY")
+  url <- "https://api.groq.com/openai/v1/chat/completions"
+  
+  prompt <- paste(
+    "Actúa como un experto en análisis de sentimiento de criptomonedas.",
+    "Analiza el siguiente texto de Reddit y devuelve ÚNICAMENTE un objeto JSON válido con dos claves:",
+    "1. 'valencia': un número entero del -5 al 5 (-5 = pánico bajista extremo, 5 = euforia alcista extrema, 0 = neutral/informativo).",
+    "2. 'emocion_dominante': elige estrictamente una de esta lista (Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral).",
+    "Texto a analizar:", texto
+  )
+  
+  # --- CAMBIO 1: Estructura del cuerpo (Formato OpenAI/Groq) ---
+  cuerpo_peticion <- list(
+    model = "llama-3.3-70b-versatile", # Especificar modelo es obligatorio
+    messages = list(
+      list(role = "user", content = prompt)
+    ),
+    # Forzamos formato JSON (en Groq se hace así)
+    response_format = list(type = "json_object")
+  )
+  
+  # --- CAMBIO 2: Headers (Groq requiere Bearer Token) ---
+  respuesta <- request(url) |>
+    req_headers(
+      `Content-Type` = "application/json",
+      `Authorization` = paste("Bearer", api_key) # La API Key va en el header, no en la URL
+    ) |>
+    req_body_json(cuerpo_peticion) |>
+    req_error(is_error = function(resp) FALSE) |> 
+    req_perform()
+  
+  # --- CAMBIO 3: Extracción de datos (La ruta del JSON cambia) ---
+  if (resp_status(respuesta) == 200) {
+    contenido <- resp_body_json(respuesta)
+    
+    # En Groq/OpenAI la ruta es: choices -> message -> content
+    texto_json <- contenido$choices[[1]]$message$content
+    datos_extraidos <- fromJSON(texto_json)
+    
+    return(tibble(
+      valencia_ia = as.numeric(datos_extraidos$valencia),
+      emocion_ia = as.character(datos_extraidos$emocion_dominante)
+    ))
+  } else {
+    # Manejo de errores corregido para la estructura de Groq
+    contenido_err <- resp_body_json(respuesta)
+    cat("\n❌ ERROR DE GROQ:\n")
+    print(contenido_err$error$message)
+  
+    return(tibble(valencia_groq = NA_real_, emocion_groq = NA_character_))
+  }
+}
+# analizar_con_ia <- function(texto) {
+#   
+#   api_key <- Sys.getenv("GROQ_API_KEY")
+#   url <- paste0("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=", api_key)
+#   
+#   # Prompt estructurado (System Instructions encubiertas en el prompt)
+#   prompt <- paste(
+#     "Actúa como un experto en análisis de sentimiento de criptomonedas.",
+#     "Analiza el siguiente texto de Reddit y devuelve ÚNICAMENTE un objeto JSON válido con dos claves:",
+#     "1. 'valencia': un número entero del -5 al 5 (-5 = pánico bajista extremo, 5 = euforia alcista extrema, 0 = neutral/informativo).",
+#     "2. 'emocion_dominante': elige estrictamente una de esta lista (Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral).",
+#     "Texto a analizar:", texto
+#   )
+#   
+#   # Estructura de la petición
+#   cuerpo_peticion <- list(
+#     contents = list(
+#       list(parts = list(list(text = prompt)))
+#     ),
+#     # Forzamos a que el modelo responda en formato JSON
+#     generationConfig = list(response_mime_type = "application/json")
+#   )
+#   
+#   # Hacemos la llamada a la API
+#   respuesta <- request(url) |>
+#     req_headers(`Content-Type` = "application/json") |>
+#     req_body_json(cuerpo_peticion) |>
+#     req_error(is_error = function(resp) FALSE) |> # Manejo suave de errores
+#     req_perform()
+#   
+#   # Extracción de los datos
+#   if (resp_status(respuesta) == 200) {
+#     contenido <- resp_body_json(respuesta)
+#     texto_json <- contenido$candidates[[1]]$content$parts[[1]]$text
+#     datos_extraidos <- fromJSON(texto_json)
+#     
+#     return(tibble(
+#       valencia_ia = as.numeric(datos_extraidos$valencia),
+#       emocion_ia = as.character(datos_extraidos$emocion_dominante)
+#     ))
+#   } else {
+#     # Si hay error (ej. límite de cuota), devolvemos NA
+#     
+#     cat("\n❌ ERROR DE GEMINI:\n")
+#     cat(contenido$error$message, "\n")
+#     return("Error en API")
+#   
+#     return(tibble(valencia_ia = NA_real_, emocion_ia = NA_character_))
+#   }
+# }
+```
+
+
+```{r}
+# 3. EJECUCIÓN DEL ANÁLISIS (MUESTRA ESTRATÉGICA) -------------------------
+# ATENCIÓN TFG: Llamar a la API para miles de filas puede tardar y consumir cuota.
+# Te recomiendo hacer esto sobre una muestra representativa o sobre los posts más votados.
+
+# Supongamos que partimos de tu dataframe ya analizado con NRC
+# data_comparativa <- data_con_sentim |> head(200) # (Usa una muestra para probar)
+
+# print("Iniciando consulta a la API de Gemini... Esto puede tardar.")
+
+# Aplicamos la función fila por fila (usamos un bucle seguro con retardo para no saturar la API)
+# data_comparativa <- data_con_sentim |> slice_sample(n = 20) # probamos con 20 de primeras para no sobrecargar
+# resultados_ia <- list()
+# for (i in 1:nrow(data_comparativa)) {
+#   resultados_ia[[i]] <- analizar_con_ia(data_comparativa$texto_limpio[i])
+#   print(i)
+#   Sys.sleep(5) # Pausa de 1 segundo para respetar los límites de la API gratuita
+# }
+
+# resultados_ia <- list()
+# 
+# for (i in 1:nrow(data_comparativa)) {
+#   # CAMBIA 'texto_limpio' por el nombre real de tu columna si es distinto
+#   texto_actual <- data_comparativa$texto_limpio[i] 
+#   
+#   # 1. Comprobamos si hay texto
+#   if (is.na(texto_actual) || nchar(texto_actual) < 2) {
+#     print(paste("Fila", i, ": ERROR - El texto está vacío o es NA."))
+#     resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+#     next
+#   }
+#   
+#   print(paste("Fila", i, "- Procesando texto de", nchar(texto_actual), "caracteres..."))
+#   
+#   # 2. Llamamos a la IA
+#   resultados_ia[[i]] <- analizar_con_ia(texto_actual)
+#   
+#   # 3. Imprimimos el resultado al instante para verlo
+#   print(resultados_ia[[i]])
+#   
+#   Sys.sleep(2) # Pausa de 2 segundos (muy seguro para la API)
+# }
+
+# Unimos los resultados de Gemini al dataframe original
+datos_gemini_df <- bind_rows(resultados_ia)
+data_comparativa <- bind_cols(data_comparativa, datos_gemini_df)
+```
+
+
+
+```{r}
+print("Iniciando extracción segura (Anti-Bloqueos)...")
+resultados_ia <- list()
+data_comparativa <- data_con_sentim |> slice_sample(n = 20) # probamos con 20 de primeras para no sobrecargar
+
+# Asegúrate de usar una muestra para probar. Ej: data_comparativa <- data_con_sentim |> slice_sample(n = 20)
+
+for (i in 1:nrow(data_comparativa)) {
+  texto_actual <- data_comparativa$texto_limpio[i] # Revisa que sea tu columna real
+  
+  if (is.na(texto_actual) || nchar(texto_actual) < 2) {
+    resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+    next
+  }
+  
+  print(paste("Consultando fila", i, ": ", data_comparativa$texto_limpio))
+  
+  # Sistema de reintento automático
+  exito <- FALSE
+  intentos <- 0
+  
+  while(!exito && intentos < 5) {
+    # Llamamos a tu función
+    resultado <- analizar_con_ia(texto_actual) 
+    
+    # Si nos devuelve NA (bloqueo por error 429 u otro)
+    if(is.na(resultado$valencia_ia[1])) {
+       print("  ⏳ Límite de velocidad detectado. Esperando 20 segundos...")
+       Sys.sleep(20) # Pausa larga para que Google nos perdone
+       intentos <- intentos + 1
+    } else {
+       # Si hay éxito, guardamos y salimos del bucle while
+       resultados_ia[[i]] <- resultado
+       print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
+       exito <- TRUE
+    }
+  }
+  
+  if(!exito) {
+     print("  ❌ Imposible procesar tras 3 intentos. Guardando NA.")
+     resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+  }
+  
+  # Pausa conservadora de 6 segundos entre peticiones exitosas (10 peticiones/minuto)
+  Sys.sleep(6) 
+}
+
+# Unimos los resultados
+datos_gemini_df <- bind_rows(resultados_ia)
+data_comparativa <- bind_cols(data_comparativa, datos_gemini_df)
+
+print("¡Extracción finalizada!")
+```
+
+
+```{r}
+# =========================================================================
+# ANÁLISIS 1: MATRIZ DE CORRELACIÓN Y DISPERSIÓN (NRC vs GEMINI)
+# =========================================================================
+# Objetivo: Ver si ambos modelos están de acuerdo en la polaridad del texto.
+
+# Normalizamos la valencia del NRC para que esté en una escala similar (-5 a 5)
+# Esto depende de cómo de largos sean tus textos, pero asumimos que lo estandarizamos
+data_comparativa <- data_comparativa |>
+  mutate(valencia_nrc_norm = scale(valencia)[,1] * 2) # Ajuste visual aproximado
+
+correlacion_modelos <- cor.test(data_comparativa$valencia, data_comparativa$valencia_ia, method = "spearman")
+
+grafico_comparativa <- ggplot(data_comparativa, aes(x = valencia, y = valencia_ia)) +
+  geom_jitter(alpha = 0.4, color = "purple", width = 0.2, height = 0.2) +
+  geom_smooth(method = "lm", color = "black", linetype = "dashed") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Acuerdo de Polaridad: Diccionario NRC vs. IA (Gemini)",
+    subtitle = "Comparativa de la evaluación del sentimiento en textos cripto",
+    x = "Valencia NRC (Lexicográfica)",
+    y = "Valencia Gemini (Contextual)",
+    caption = paste("Correlación Spearman:", round(correlacion_modelos$estimate, 3))
+  )
+
+print(grafico_comparativa)
+
+
+# =========================================================================
+# ANÁLISIS 2: EVOLUCIÓN TEMPORAL COMPARADA
+# =========================================================================
+# Objetivo: Observar si la IA detecta los mismos picos de pánico o euforia temporal.
+
+data_temporal_comparada <- data_comparativa |>
+  mutate(fecha = as.Date(date)) |>
+  group_by(fecha) |>
+  summarise(
+    media_nrc = mean(valencia, na.rm = TRUE),
+    media_gemini = mean(valencia_ia, na.rm = TRUE)
+  ) |>
+  # Estandarizamos ambas variables para compararlas en el mismo eje Y (Z-scores)
+  mutate(
+    nrc_suavizado = scale(rollmean(media_nrc, k = 7, fill = NA, align = "right")),
+    gemini_suavizado = scale(rollmean(media_gemini, k = 7, fill = NA, align = "right"))
+  ) |>
+  pivot_longer(cols = c(nrc_suavizado, gemini_suavizado), names_to = "Modelo", values_to = "Tendencia")
+
+grafico_temporal_ia <- ggplot(data_temporal_comparada, aes(x = fecha, y = Tendencia, color = Modelo)) +
+  geom_line(size = 1.2) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  scale_color_manual(
+    values = c("gemini_suavizado" = "#1A73E8", "nrc_suavizado" = "firebrick"),
+    labels = c("IA (Gemini)", "Clásico (NRC)")
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Monitorización del Sentimiento: Enfoque Clásico vs. IA",
+    subtitle = "Valores estandarizados y suavizados a 7 días",
+    x = "Fecha",
+    y = "Valencia (Z-Score)",
+    color = "Metodología"
+  ) +
+  theme(legend.position = "top")
+
+print(grafico_temporal_ia)
+```
+
+```{r}
+# 1. ANÁLISIS DE EMOCIONES GENERAL (GEMINI) -------------------------------
+# Contamos la frecuencia de cada emoción dominante detectada por la IA
+totales_emociones_gemini <- data_comparativa |>
+  filter(!is.na(emocion_ia)) |> # Eliminamos posibles errores de la API
+  count(emocion_ia, name = "valor") 
+
+# Visualización
+ggplot(totales_emociones_gemini, aes(x = reorder(emocion_ia, valor), y = valor, fill = valor)) +
+  geom_col(show.legend = FALSE) + 
+  coord_flip() +
+  scale_fill_viridis_c(option = "mako") + 
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Perfil Emocional del Mercado Cripto (Evaluación IA)",
+    subtitle = "Frecuencia de la emoción dominante según Gemini",
+    x = NULL, 
+    y = "Número de comentarios",
+    caption = "Fuente: Elaboración propia a partir de inferencia con LLM"
+  )
+```
+
+```{r}
+# 2. SCORE VS VALENCIA (GEMINI) -------------------------------------------
+# Filtramos datos válidos
+data_score_gemini <- data_comparativa |> filter(!is.na(valencia_ia))
+
+# Cálculo de correlación de Spearman
+cor_test_gemini <- cor.test(data_score_gemini$valencia_ia, data_score_gemini$score, method = "spearman")
+label_cor_gemini <- paste("Correlación Spearman (IA):", round(cor_test_gemini$estimate, 3))
+
+# Visualización
+ggplot(data_score_gemini, aes(x = valencia_ia, y = score)) +
+  scale_y_log10(labels = comma) +
+  geom_jitter(alpha = 0.3, color = "darkgreen", width = 0.2) +
+  geom_smooth(method = "gam", color = "darkorange", size = 1.2) +
+  theme_light() +
+  labs(
+    title = "Relación entre Sentimiento Contextual y Popularidad",
+    subtitle = "Análisis de valencia mediante IA (Gemini)",
+    x = "Valencia Gemini (Pánico -5 <---> 5 Euforia)",
+    y = "Score (Escala Log10)",
+    caption = label_cor_gemini
+  )
+```
+
+
+```{r}
+# 3. PERFILES EMOCIONALES POR HILO (GEMINI) -------------------------------
+# Calculamos la proporción de cada emoción dentro de cada hilo
+comparativa_hilos_gemini <- data_comparativa |>
+  filter(!is.na(emocion_ia), !is.na(url)) |>
+  count(url, emocion_ia) |>
+  group_by(url) |>
+  mutate(proporcion = n / sum(n)) |> # Porcentaje de representación de la emoción en ese post
+  ungroup()
+
+# Visualización Multipanel (Top 15 hilos para evitar saturación)
+top_hilos <- unique(comparativa_hilos_gemini$url)[1:15]
+
+comparativa_hilos_gemini |>
+  filter(url %in% top_hilos) |>
+  ggplot(aes(x = proporcion, y = emocion_ia, fill = emocion_ia)) +
+  geom_col() +
+  facet_wrap(~url, scales = "free_y", labeller = label_wrap_gen(width = 40)) +
+  scale_x_continuous(labels = percent_format()) + # Mostramos en formato porcentaje
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 7),
+    axis.text.x = element_text(size = 7)
+  ) +
+  labs(
+    title = "Clima Emocional por Hilo de Discusión (IA)",
+    subtitle = "Proporción de emociones dominantes detectadas por Gemini",
+    x = "Proporción del debate",
+    y = NULL
+  )
+```
+
+
+```{r}
+# 4. CÁMARAS DE ECO: INTEGRACIÓN SNA-NLP (GEMINI) -------------------------
+# Unimos topología de red con sentimiento de la IA
+data_echo_ia <- tabla_roles |>
+  inner_join(data_comparativa, by = c("Usuario" = "author")) |>
+  select(Usuario, Comunidad, valencia_ia) |>
+  filter(!is.na(valencia_ia))
+
+# Visualización Violín + Jitter
+ggplot(data_echo_ia, aes(x = as.factor(Comunidad), y = valencia_ia, fill = as.factor(Comunidad))) +
+  geom_violin(alpha = 0.5, color = NA, trim = FALSE) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1, color = "darkgreen") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "red") +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Distribución de Polaridad por Clúster (Gemini)",
+    subtitle = "Análisis de cámaras de eco cripto evaluadas mediante IA",
+    x = "Comunidad (Algoritmo de Louvain)",
+    y = "Valencia Gemini (-5 <---> 5)"
+  )
+```
 
