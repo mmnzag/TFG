@@ -258,7 +258,8 @@ analizar_con_ia <- function(texto) {
   
   # --- CAMBIO 1: Estructura del cuerpo (Formato OpenAI/Groq) ---
   cuerpo_peticion <- list(
-    model = "llama-3.3-70b-versatile", # Especificar modelo es obligatorio
+    model = "llama-3.1-8b-instant",
+    # model = "llama-3.3-70b-versatile", # Especificar modelo es obligatorio
     messages = list(
       list(role = "user", content = prompt)
     ),
@@ -351,105 +352,139 @@ analizar_con_ia <- function(texto) {
 
 
 ```{r}
-# 3. EJECUCIÓN DEL ANÁLISIS (MUESTRA ESTRATÉGICA) -------------------------
-# ATENCIÓN TFG: Llamar a la API para miles de filas puede tardar y consumir cuota.
-# Te recomiendo hacer esto sobre una muestra representativa o sobre los posts más votados.
+print("Iniciando extracción segura (Anti-Bloqueos)...")
+resultados_ia <- list()
+data_comparativa <- data_con_sentim 
+                  # |> slice_sample(n = 200) # probamos con 20 de primeras para no sobrecargar
 
-# Supongamos que partimos de tu dataframe ya analizado con NRC
-# data_comparativa <- data_con_sentim |> head(200) # (Usa una muestra para probar)
+path_final <- "data/resultados_ia_final.rds"
+path_backup <- "data/resultados_ia_backup.rds"
 
-# print("Iniciando consulta a la API de Gemini... Esto puede tardar.")
+if (file.exists(path_final)) {
+  resultados_ia <- readRDS(path_final)
+  message("✅ Cargado archivo final.")
+} else if (file.exists(path_backup)) {
+  resultados_ia <- readRDS(path_backup)
+  message("⚠️ Cargado backup intermedio.")
+} else {
+  resultados_ia <- list() 
+  message("🆕 Iniciando desde cero.")
+}
 
-# Aplicamos la función fila por fila (usamos un bucle seguro con retardo para no saturar la API)
-# data_comparativa <- data_con_sentim |> slice_sample(n = 20) # probamos con 20 de primeras para no sobrecargar
-# resultados_ia <- list()
+# 2. VERIFICACIÓN DE INTEGRIDAD
+# Si ya procesamos todo, evitamos el bucle
+if (length(resultados_ia) == nrow(data_comparativa)) {
+  message("🏁 Todo el dataset ya ha sido procesado. Nada que hacer.")
+} else {
+
+  for (i in 1:nrow(data_comparativa)) {
+    # --- CAMBIO 1: EL SALTO INTELIGENTE ---
+    # Si esta fila ya tiene un resultado válido, la saltamos. 
+    # Así no gastas tokens ni tiempo volviendo a calcular de la fila 1 a la 431.
+    if (length(resultados_ia) >= i && !is.null(resultados_ia[[i]]) && !is.na(resultados_ia[[i]]$valencia_ia[1])) {
+      next 
+    }
+    # ---------------------------------------
+  
+    texto_actual <- data_comparativa$texto_limpio[i] 
+    
+    # Pequeño ajuste visual: Cortamos el texto al imprimir para que la consola no se sature
+    print(paste("Consultando fila", i, ": ", substr(texto_actual, 1, 40), "...")) 
+    
+    if (is.na(texto_actual) || nchar(texto_actual) < 2) {
+      resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+      next
+    }
+    
+    # Sistema de reintento automático
+    exito <- FALSE
+    intentos <- 0
+    
+    while(!exito && intentos < 5) {
+      # Llamamos a tu función
+      resultado <- analizar_con_ia(texto_actual) 
+      
+      # Si nos devuelve NA (bloqueo por error 429 u otro)
+      if(is.na(resultado$valencia_ia[1])) {
+         print("  ⏳ Límite de la API detectado. Esperando 20 segundos...")
+         Sys.sleep(20) 
+         intentos <- intentos + 1
+      } else {
+         # Si hay éxito, guardamos y salimos del bucle while
+         resultados_ia[[i]] <- resultado
+         print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
+         exito <- TRUE
+      }
+    }
+    
+    if(!exito) {
+       print("  ❌ Imposible procesar tras 5 intentos. Guardando NA.")
+       resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+    }
+    
+    # --- CAMBIO 2: EL AUTOGUARDADO ---
+    # Cada 50 filas, guardamos el progreso en el disco duro. Si Groq te vuelve 
+    # a tirar o se te va la luz, solo pierdes las últimas 49, no el trabajo de horas.
+    if (i %% 50 == 0) {
+      print(paste("💾 Autoguardado de seguridad (Fila", i, ")"))
+      saveRDS(resultados_ia, "data/resultados_ia_backup.rds")
+    }
+    # ---------------------------------
+    
+    # Pausa conservadora de 6 segundos entre peticiones exitosas (10 peticiones/minuto)
+    Sys.sleep(6) 
+  }
+  
+  # --- CAMBIO 3: GUARDADO FINAL ---
+  # Cuando termine el bucle por completo, guardamos el archivo definitivo
+  saveRDS(resultados_ia, "data/resultados_ia_final.rds")
+  print("🎉 ¡Procesamiento de IA terminado con éxito!")
+}
+# ---------------------------------
+# Asegúrate de usar una muestra para probar. 
 # for (i in 1:nrow(data_comparativa)) {
-#   resultados_ia[[i]] <- analizar_con_ia(data_comparativa$texto_limpio[i])
-#   print(i)
-#   Sys.sleep(5) # Pausa de 1 segundo para respetar los límites de la API gratuita
-# }
-
-# resultados_ia <- list()
-# 
-# for (i in 1:nrow(data_comparativa)) {
-#   # CAMBIA 'texto_limpio' por el nombre real de tu columna si es distinto
-#   texto_actual <- data_comparativa$texto_limpio[i] 
+#   texto_actual <- data_comparativa$texto_limpio[i] # Revisa que sea tu columna real
+#   print(paste("Consultando fila", i, ": ", texto_actual))
 #   
-#   # 1. Comprobamos si hay texto
 #   if (is.na(texto_actual) || nchar(texto_actual) < 2) {
-#     print(paste("Fila", i, ": ERROR - El texto está vacío o es NA."))
 #     resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
 #     next
 #   }
 #   
-#   print(paste("Fila", i, "- Procesando texto de", nchar(texto_actual), "caracteres..."))
 #   
-#   # 2. Llamamos a la IA
-#   resultados_ia[[i]] <- analizar_con_ia(texto_actual)
+#   # Sistema de reintento automático
+#   exito <- FALSE
+#   intentos <- 0
 #   
-#   # 3. Imprimimos el resultado al instante para verlo
-#   print(resultados_ia[[i]])
+#   while(!exito && intentos < 5) {
+#     # Llamamos a tu función
+#     resultado <- analizar_con_ia(texto_actual) 
+#     
+#     # Si nos devuelve NA (bloqueo por error 429 u otro)
+#     if(is.na(resultado$valencia_ia[1])) {
+#        print("  ⏳ Límite de velocidad detectado. Esperando 20 segundos...")
+#        Sys.sleep(20) # Pausa larga para que Google nos perdone
+#        intentos <- intentos + 1
+#     } else {
+#        # Si hay éxito, guardamos y salimos del bucle while
+#        resultados_ia[[i]] <- resultado
+#        print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
+#        exito <- TRUE
+#     }
+#   }
 #   
-#   Sys.sleep(2) # Pausa de 2 segundos (muy seguro para la API)
+#   if(!exito) {
+#      print("  ❌ Imposible procesar tras 3 intentos. Guardando NA.")
+#      resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
+#   }
+#   
+#   # Pausa conservadora de 6 segundos entre peticiones exitosas (10 peticiones/minuto)
+#   Sys.sleep(6) 
 # }
 
-# Unimos los resultados de Gemini al dataframe original
-datos_gemini_df <- bind_rows(resultados_ia)
-data_comparativa <- bind_cols(data_comparativa, datos_gemini_df)
-```
-
-
-
-```{r}
-print("Iniciando extracción segura (Anti-Bloqueos)...")
-resultados_ia <- list()
-data_comparativa <- data_con_sentim |> slice_sample(n = 20) # probamos con 20 de primeras para no sobrecargar
-
-# Asegúrate de usar una muestra para probar. Ej: data_comparativa <- data_con_sentim |> slice_sample(n = 20)
-
-for (i in 1:nrow(data_comparativa)) {
-  texto_actual <- data_comparativa$texto_limpio[i] # Revisa que sea tu columna real
-  
-  if (is.na(texto_actual) || nchar(texto_actual) < 2) {
-    resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-    next
-  }
-  
-  print(paste("Consultando fila", i, ": ", data_comparativa$texto_limpio))
-  
-  # Sistema de reintento automático
-  exito <- FALSE
-  intentos <- 0
-  
-  while(!exito && intentos < 5) {
-    # Llamamos a tu función
-    resultado <- analizar_con_ia(texto_actual) 
-    
-    # Si nos devuelve NA (bloqueo por error 429 u otro)
-    if(is.na(resultado$valencia_ia[1])) {
-       print("  ⏳ Límite de velocidad detectado. Esperando 20 segundos...")
-       Sys.sleep(20) # Pausa larga para que Google nos perdone
-       intentos <- intentos + 1
-    } else {
-       # Si hay éxito, guardamos y salimos del bucle while
-       resultados_ia[[i]] <- resultado
-       print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
-       exito <- TRUE
-    }
-  }
-  
-  if(!exito) {
-     print("  ❌ Imposible procesar tras 3 intentos. Guardando NA.")
-     resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-  }
-  
-  # Pausa conservadora de 6 segundos entre peticiones exitosas (10 peticiones/minuto)
-  Sys.sleep(6) 
-}
-
 # Unimos los resultados
-datos_gemini_df <- bind_rows(resultados_ia)
-data_comparativa <- bind_cols(data_comparativa, datos_gemini_df)
+datos_ia_df <- bind_rows(resultados_ia)
+data_comparativa <- bind_cols(data_comparativa, datos_ia_df)
 
 print("¡Extracción finalizada!")
 ```
@@ -457,7 +492,7 @@ print("¡Extracción finalizada!")
 
 ```{r}
 # =========================================================================
-# ANÁLISIS 1: MATRIZ DE CORRELACIÓN Y DISPERSIÓN (NRC vs GEMINI)
+# ANÁLISIS 1: MATRIZ DE CORRELACIÓN Y DISPERSIÓN (NRC vs ia)
 # =========================================================================
 # Objetivo: Ver si ambos modelos están de acuerdo en la polaridad del texto.
 
@@ -473,16 +508,18 @@ grafico_comparativa <- ggplot(data_comparativa, aes(x = valencia, y = valencia_i
   geom_smooth(method = "lm", color = "black", linetype = "dashed") +
   theme_minimal(base_size = 12) +
   labs(
-    title = "Acuerdo de Polaridad: Diccionario NRC vs. IA (Gemini)",
+    title = "Acuerdo de Polaridad: Diccionario NRC vs. IA",
     subtitle = "Comparativa de la evaluación del sentimiento en textos cripto",
     x = "Valencia NRC (Lexicográfica)",
-    y = "Valencia Gemini (Contextual)",
+    y = "Valencia ia (Contextual)",
     caption = paste("Correlación Spearman:", round(correlacion_modelos$estimate, 3))
   )
 
 print(grafico_comparativa)
+```
 
 
+```{r}
 # =========================================================================
 # ANÁLISIS 2: EVOLUCIÓN TEMPORAL COMPARADA
 # =========================================================================
@@ -493,21 +530,21 @@ data_temporal_comparada <- data_comparativa |>
   group_by(fecha) |>
   summarise(
     media_nrc = mean(valencia, na.rm = TRUE),
-    media_gemini = mean(valencia_ia, na.rm = TRUE)
+    media_ia = mean(valencia_ia, na.rm = TRUE)
   ) |>
   # Estandarizamos ambas variables para compararlas en el mismo eje Y (Z-scores)
   mutate(
     nrc_suavizado = scale(rollmean(media_nrc, k = 7, fill = NA, align = "right")),
-    gemini_suavizado = scale(rollmean(media_gemini, k = 7, fill = NA, align = "right"))
+    ia_suavizado = scale(rollmean(media_ia, k = 7, fill = NA, align = "right"))
   ) |>
-  pivot_longer(cols = c(nrc_suavizado, gemini_suavizado), names_to = "Modelo", values_to = "Tendencia")
+  pivot_longer(cols = c(nrc_suavizado, ia_suavizado), names_to = "Modelo", values_to = "Tendencia")
 
 grafico_temporal_ia <- ggplot(data_temporal_comparada, aes(x = fecha, y = Tendencia, color = Modelo)) +
   geom_line(size = 1.2) +
   geom_hline(yintercept = 0, linetype = "dotted") +
   scale_color_manual(
-    values = c("gemini_suavizado" = "#1A73E8", "nrc_suavizado" = "firebrick"),
-    labels = c("IA (Gemini)", "Clásico (NRC)")
+    values = c("ia_suavizado" = "#1A73E8", "nrc_suavizado" = "firebrick"),
+    labels = c("IA (ia)", "Clásico (NRC)")
   ) +
   theme_minimal() +
   labs(
@@ -523,21 +560,21 @@ print(grafico_temporal_ia)
 ```
 
 ```{r}
-# 1. ANÁLISIS DE EMOCIONES GENERAL (GEMINI) -------------------------------
+# 1. ANÁLISIS DE EMOCIONES GENERAL (ia) -------------------------------
 # Contamos la frecuencia de cada emoción dominante detectada por la IA
-totales_emociones_gemini <- data_comparativa |>
+totales_emociones_ia <- data_comparativa |>
   filter(!is.na(emocion_ia)) |> # Eliminamos posibles errores de la API
   count(emocion_ia, name = "valor") 
 
 # Visualización
-ggplot(totales_emociones_gemini, aes(x = reorder(emocion_ia, valor), y = valor, fill = valor)) +
+ggplot(totales_emociones_ia, aes(x = reorder(emocion_ia, valor), y = valor, fill = valor)) +
   geom_col(show.legend = FALSE) + 
   coord_flip() +
   scale_fill_viridis_c(option = "mako") + 
   theme_minimal(base_size = 12) +
   labs(
     title = "Perfil Emocional del Mercado Cripto (Evaluación IA)",
-    subtitle = "Frecuencia de la emoción dominante según Gemini",
+    subtitle = "Frecuencia de la emoción dominante según ia",
     x = NULL, 
     y = "Número de comentarios",
     caption = "Fuente: Elaboración propia a partir de inferencia con LLM"
@@ -545,34 +582,34 @@ ggplot(totales_emociones_gemini, aes(x = reorder(emocion_ia, valor), y = valor, 
 ```
 
 ```{r}
-# 2. SCORE VS VALENCIA (GEMINI) -------------------------------------------
+# 2. SCORE VS VALENCIA (ia) -------------------------------------------
 # Filtramos datos válidos
-data_score_gemini <- data_comparativa |> filter(!is.na(valencia_ia))
+data_score_ia <- data_comparativa |> filter(!is.na(valencia_ia))
 
 # Cálculo de correlación de Spearman
-cor_test_gemini <- cor.test(data_score_gemini$valencia_ia, data_score_gemini$score, method = "spearman")
-label_cor_gemini <- paste("Correlación Spearman (IA):", round(cor_test_gemini$estimate, 3))
+cor_test_ia <- cor.test(data_score_ia$valencia_ia, data_score_ia$score, method = "spearman")
+label_cor_ia <- paste("Correlación Spearman (IA):", round(cor_test_ia$estimate, 3))
 
 # Visualización
-ggplot(data_score_gemini, aes(x = valencia_ia, y = score)) +
+ggplot(data_score_ia, aes(x = valencia_ia, y = score)) +
   scale_y_log10(labels = comma) +
   geom_jitter(alpha = 0.3, color = "darkgreen", width = 0.2) +
   geom_smooth(method = "gam", color = "darkorange", size = 1.2) +
   theme_light() +
   labs(
     title = "Relación entre Sentimiento Contextual y Popularidad",
-    subtitle = "Análisis de valencia mediante IA (Gemini)",
-    x = "Valencia Gemini (Pánico -5 <---> 5 Euforia)",
+    subtitle = "Análisis de valencia mediante IA (ia)",
+    x = "Valencia ia (Pánico -5 <---> 5 Euforia)",
     y = "Score (Escala Log10)",
-    caption = label_cor_gemini
+    caption = label_cor_ia
   )
 ```
 
 
 ```{r}
-# 3. PERFILES EMOCIONALES POR HILO (GEMINI) -------------------------------
+# 3. PERFILES EMOCIONALES POR HILO (ia) -------------------------------
 # Calculamos la proporción de cada emoción dentro de cada hilo
-comparativa_hilos_gemini <- data_comparativa |>
+comparativa_hilos_ia <- data_comparativa |>
   filter(!is.na(emocion_ia), !is.na(url)) |>
   count(url, emocion_ia) |>
   group_by(url) |>
@@ -580,9 +617,9 @@ comparativa_hilos_gemini <- data_comparativa |>
   ungroup()
 
 # Visualización Multipanel (Top 15 hilos para evitar saturación)
-top_hilos <- unique(comparativa_hilos_gemini$url)[1:15]
+top_hilos <- unique(comparativa_hilos_ia$url)[1:15]
 
-comparativa_hilos_gemini |>
+comparativa_hilos_ia |>
   filter(url %in% top_hilos) |>
   ggplot(aes(x = proporcion, y = emocion_ia, fill = emocion_ia)) +
   geom_col() +
@@ -596,7 +633,7 @@ comparativa_hilos_gemini |>
   ) +
   labs(
     title = "Clima Emocional por Hilo de Discusión (IA)",
-    subtitle = "Proporción de emociones dominantes detectadas por Gemini",
+    subtitle = "Proporción de emociones dominantes detectadas por ia",
     x = "Proporción del debate",
     y = NULL
   )
@@ -604,7 +641,7 @@ comparativa_hilos_gemini |>
 
 
 ```{r}
-# 4. CÁMARAS DE ECO: INTEGRACIÓN SNA-NLP (GEMINI) -------------------------
+# 4. CÁMARAS DE ECO: INTEGRACIÓN SNA-NLP (ia) -------------------------
 # Unimos topología de red con sentimiento de la IA
 data_echo_ia <- tabla_roles |>
   inner_join(data_comparativa, by = c("Usuario" = "author")) |>
@@ -622,10 +659,10 @@ ggplot(data_echo_ia, aes(x = as.factor(Comunidad), y = valencia_ia, fill = as.fa
     panel.grid.minor = element_blank()
   ) +
   labs(
-    title = "Distribución de Polaridad por Clúster (Gemini)",
+    title = "Distribución de Polaridad por Clúster (ia)",
     subtitle = "Análisis de cámaras de eco cripto evaluadas mediante IA",
     x = "Comunidad (Algoritmo de Louvain)",
-    y = "Valencia Gemini (-5 <---> 5)"
+    y = "Valencia ia (-5 <---> 5)"
   )
 ```
 

@@ -1,16 +1,23 @@
 ---
 title: "Carga y preprocesamiento de datos"
-subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
-author: "Marta Muñoz Aguilar"
-date: "`r Sys.Date()`"
 format:
   html:
-    toc: true
-    toc-depth: 3
-    code-fold: show
-    theme: cosmo
-    highlight-style: dracula
+    theme: default
+    highlight-style: github
 ---
+# ---
+# title: "Carga y preprocesamiento de datos"
+# subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+# author: "Marta Muñoz Aguilar"
+# date: "`r Sys.Date()`"
+# format:
+#   html:
+#     toc: true
+#     toc-depth: 3
+#     code-fold: show
+#     theme: cosmo
+#     highlight-style: dracula
+# ---
 
 
 ```{r}
@@ -30,6 +37,7 @@ archivo_datos <- "data/reddit_thread_crypto.rds"
 
 if (file.exists(archivo_datos)) {
   # Si ya lo descargamos antes, lo cargamos del disco
+  message("--- ARCHIVO ENCONTRADO: Cargando datos locales ---")
   hilos <- readRDS(archivo_datos)
 } else {
   # Si no existe, intentamos descargarlo
@@ -73,14 +81,13 @@ Se descargan los comentarios de los hilos y su contenido
 ```{r}
 # Descarga de contenido
 path_comentarios <- "data/reddit_comments.rds"
-# if (file.exists(path_comentarios)) {
-#   contenido <- readRDS(path_comentarios)
-# } else {
-#   contenido <- get_thread_content(url_objetivo)
-#   saveRDS(contenido, path_comentarios)
-# }
-contenido <- get_thread_content(url_objetivo)
-saveRDS(contenido, path_comentarios)
+if (file.exists(path_comentarios)) {
+  contenido <- readRDS(path_comentarios)
+  message("--- ARCHIVO ENCONTRADO: Cargando datos locales---")
+} else {
+  contenido <- get_thread_content(url_objetivo)
+  saveRDS(contenido, path_comentarios)
+}
 
 comentarios <- contenido$comments
 ```
