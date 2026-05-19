@@ -22,9 +22,14 @@ library(scales)     # Formateo de escalas en gráficos
 library(zoo)        # Cálculo de medias móviles
 library(viridis)    # Paletas de colores accesibles
 
+library(httr2)    # Para hacer peticiones a la API de Gemini
+library(jsonlite) # Para procesar la respuesta de la IA
+
 textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
 data_texto <- readRDS("data/data_texto_procesado.rds")
 tabla_roles <- readRDS("data/tabla_roles.rds")
+
+mi_api_key <- keyring::key_get(service = "groq", username = "mi_cuenta_api")
 ```
 
 
@@ -226,17 +231,15 @@ Los resultados de la integración SNA-NLP descartan la presencia de cámaras de 
 
 
 # Comparación con la IA
+En esta fase se configura la infraestructura para realizar el análisis de sentimiento basado en Inteligencia Artificial (IA). Se ha sustituido el enfoque léxico clásico por el modelo Llama-3.3-70b, ejecutado a través de la API de Groq para maximizar la velocidad de inferencia. La función analizar_con_ia() implementa técnicas de Prompt Engineering con restricciones severas: fuerza al modelo a estructurar su respuesta como un objeto JSON y limita el catálogo de respuestas a las ocho emociones exactas de Plutchik en inglés. Esto garantiza la limpieza de los datos y permite una comparativa simétrica y estandarizada frente a los resultados obtenidos previamente con el algoritmo NRC.
+
 ```{r}
 # =========================================================================
 # TFG: COMPARATIVA DE SENTIMIENTO - ALGORITMO CLÁSICO (NRC) VS IA (GEMINI)
 # =========================================================================
 
 # 1. LIBRERÍAS NECESARIAS -------------------------------------------------
-library(tidyverse)
-library(httr2)    # Para hacer peticiones a la API de Gemini
-library(jsonlite) # Para procesar la respuesta de la IA
-library(scales)
-library(zoo)
+
 
 # Configura tu clave de API (Sustituye por tu clave real obtenida en Google AI Studio)
 # Sys.setenv(GEMINI_API_KEY = "TU_CLAVE_API_AQUI")
@@ -244,22 +247,28 @@ library(zoo)
 # 2. FUNCIÓN PARA CONSULTAR A GEMINI --------------------------------------
 # Creamos una función que envía el texto a Gemini y fuerza una respuesta en JSON
 analizar_con_ia <- function(texto) {
-  
-  api_key <- Sys.getenv("GROQ_API_KEY")
+
   url <- "https://api.groq.com/openai/v1/chat/completions"
   
+  # prompt <- paste(
+  #   "Actúa como un experto en análisis de sentimiento de criptomonedas.",
+  #   "Analiza el siguiente texto de Reddit y devuelve ÚNICAMENTE un objeto JSON válido con dos claves:",
+  #   "1. 'valencia': un número entero del -5 al 5 (-5 = pánico bajista extremo, 5 = euforia alcista extrema, 0 = neutral/informativo).",
+  #   "2. 'emocion_dominante': elige estrictamente una de esta lista (Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral).",
+  #   "Texto a analizar:", texto
+  # )
   prompt <- paste(
     "Actúa como un experto en análisis de sentimiento de criptomonedas.",
     "Analiza el siguiente texto de Reddit y devuelve ÚNICAMENTE un objeto JSON válido con dos claves:",
     "1. 'valencia': un número entero del -5 al 5 (-5 = pánico bajista extremo, 5 = euforia alcista extrema, 0 = neutral/informativo).",
-    "2. 'emocion_dominante': elige estrictamente una de esta lista (Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral).",
+    "2. 'emocion_dominante': TIENES QUE ELEGIR EXACTAMENTE UNA palabra de esta lista en inglés, sin traducir, sin añadir explicaciones y respetando las mayúsculas: [Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral].",
+    "REGLA ESTRICTA: Está totalmente prohibido usar palabras fuera de esa lista. Si detectas ironía, frustración u otra emoción, busca cuál es la más cercana de la lista y pon solo esa.",
     "Texto a analizar:", texto
   )
   
   # --- CAMBIO 1: Estructura del cuerpo (Formato OpenAI/Groq) ---
   cuerpo_peticion <- list(
     model = "llama-3.1-8b-instant",
-    # model = "llama-3.3-70b-versatile", # Especificar modelo es obligatorio
     messages = list(
       list(role = "user", content = prompt)
     ),
@@ -271,7 +280,7 @@ analizar_con_ia <- function(texto) {
   respuesta <- request(url) |>
     req_headers(
       `Content-Type` = "application/json",
-      `Authorization` = paste("Bearer", api_key) # La API Key va en el header, no en la URL
+      `Authorization` = paste("Bearer", mi_api_key) # La API Key va en el header, no en la URL
     ) |>
     req_body_json(cuerpo_peticion) |>
     req_error(is_error = function(resp) FALSE) |> 
@@ -298,59 +307,9 @@ analizar_con_ia <- function(texto) {
     return(tibble(valencia_groq = NA_real_, emocion_groq = NA_character_))
   }
 }
-# analizar_con_ia <- function(texto) {
-#   
-#   api_key <- Sys.getenv("GROQ_API_KEY")
-#   url <- paste0("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=", api_key)
-#   
-#   # Prompt estructurado (System Instructions encubiertas en el prompt)
-#   prompt <- paste(
-#     "Actúa como un experto en análisis de sentimiento de criptomonedas.",
-#     "Analiza el siguiente texto de Reddit y devuelve ÚNICAMENTE un objeto JSON válido con dos claves:",
-#     "1. 'valencia': un número entero del -5 al 5 (-5 = pánico bajista extremo, 5 = euforia alcista extrema, 0 = neutral/informativo).",
-#     "2. 'emocion_dominante': elige estrictamente una de esta lista (Trust, Fear, Joy, Sadness, Anger, Anticipation, Disgust, Surprise, Neutral).",
-#     "Texto a analizar:", texto
-#   )
-#   
-#   # Estructura de la petición
-#   cuerpo_peticion <- list(
-#     contents = list(
-#       list(parts = list(list(text = prompt)))
-#     ),
-#     # Forzamos a que el modelo responda en formato JSON
-#     generationConfig = list(response_mime_type = "application/json")
-#   )
-#   
-#   # Hacemos la llamada a la API
-#   respuesta <- request(url) |>
-#     req_headers(`Content-Type` = "application/json") |>
-#     req_body_json(cuerpo_peticion) |>
-#     req_error(is_error = function(resp) FALSE) |> # Manejo suave de errores
-#     req_perform()
-#   
-#   # Extracción de los datos
-#   if (resp_status(respuesta) == 200) {
-#     contenido <- resp_body_json(respuesta)
-#     texto_json <- contenido$candidates[[1]]$content$parts[[1]]$text
-#     datos_extraidos <- fromJSON(texto_json)
-#     
-#     return(tibble(
-#       valencia_ia = as.numeric(datos_extraidos$valencia),
-#       emocion_ia = as.character(datos_extraidos$emocion_dominante)
-#     ))
-#   } else {
-#     # Si hay error (ej. límite de cuota), devolvemos NA
-#     
-#     cat("\n❌ ERROR DE GEMINI:\n")
-#     cat(contenido$error$message, "\n")
-#     return("Error en API")
-#   
-#     return(tibble(valencia_ia = NA_real_, emocion_ia = NA_character_))
-#   }
-# }
 ```
 
-
+Este bloque ejecuta la extracción masiva del sentimiento sobre el dataframe completo a través de la API de Groq. Dado el volumen de datos y los límites de peticiones por minuto (Rate Limits) de la API, se ha diseñado un bucle de extracción con tolerancia a fallos. El script implementa un sistema de reintentos automáticos, gestión de cuotas mediante pausas controladas, autoguardado periódico en disco (cada 50 iteraciones) y un mecanismo de reanudación inteligente que evita reprocesar textos ya evaluados en caso de corte o desconexión.
 ```{r}
 print("Iniciando extracción segura (Anti-Bloqueos)...")
 resultados_ia <- list()
@@ -440,56 +399,40 @@ if (length(resultados_ia) == nrow(data_comparativa)) {
   saveRDS(resultados_ia, "data/resultados_ia_final.rds")
   print("🎉 ¡Procesamiento de IA terminado con éxito!")
 }
-# ---------------------------------
-# Asegúrate de usar una muestra para probar. 
-# for (i in 1:nrow(data_comparativa)) {
-#   texto_actual <- data_comparativa$texto_limpio[i] # Revisa que sea tu columna real
-#   print(paste("Consultando fila", i, ": ", texto_actual))
-#   
-#   if (is.na(texto_actual) || nchar(texto_actual) < 2) {
-#     resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-#     next
-#   }
-#   
-#   
-#   # Sistema de reintento automático
-#   exito <- FALSE
-#   intentos <- 0
-#   
-#   while(!exito && intentos < 5) {
-#     # Llamamos a tu función
-#     resultado <- analizar_con_ia(texto_actual) 
-#     
-#     # Si nos devuelve NA (bloqueo por error 429 u otro)
-#     if(is.na(resultado$valencia_ia[1])) {
-#        print("  ⏳ Límite de velocidad detectado. Esperando 20 segundos...")
-#        Sys.sleep(20) # Pausa larga para que Google nos perdone
-#        intentos <- intentos + 1
-#     } else {
-#        # Si hay éxito, guardamos y salimos del bucle while
-#        resultados_ia[[i]] <- resultado
-#        print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
-#        exito <- TRUE
-#     }
-#   }
-#   
-#   if(!exito) {
-#      print("  ❌ Imposible procesar tras 3 intentos. Guardando NA.")
-#      resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-#   }
-#   
-#   # Pausa conservadora de 6 segundos entre peticiones exitosas (10 peticiones/minuto)
-#   Sys.sleep(6) 
-# }
 
 # Unimos los resultados
 datos_ia_df <- bind_rows(resultados_ia)
 data_comparativa <- bind_cols(data_comparativa, datos_ia_df)
+# > data_comparativa <- bind_cols(data_comparativa[1:400,], datos_ia_df)
+
 
 print("¡Extracción finalizada!")
 ```
 
 
+Se realiza una limpieza, en caso de que la IA haya alucinado.
+```{r}
+data_comparativa <- data_comparativa |>
+  filter(valencia_ia >= -5 & valencia_ia <= 5) |>
+  mutate(
+    # 1. Forzamos todo a formato Título (Fear, Anger...) para unificar las MAYÚSCULAS
+    emocion_ia = str_to_title(trimws(emocion_ia)), 
+    
+    # 2. Reasignamos las variaciones raras a su categoría matriz
+    emocion_ia = case_when(
+      str_detect(emocion_ia, "Sarcasm|Disgust|Distrust") ~ "Disgust",
+      emocion_ia %in% c("Furia", "Fury", "Frustration", "Frustración", "Angry") ~ "Anger",
+      emocion_ia %in% c("Neutrality", "Neural", "None") ~ "Neutral",
+      emocion_ia %in% c("Trst", "Trust") ~ "Trust", # Por si se comió la 'u'
+      emocion_ia %in% c("Regret") ~ "Sadness",
+      TRUE ~ emocion_ia # El resto (Fear, Joy, Surprise...) se quedan como están
+    )
+  )
+```
+
+
+
+Este bloque ejecuta un análisis de correlación cruzada para comparar la polaridad asignada por el método lexicográfico (NRC) frente a la inferencia contextual de la Inteligencia Artificial. Mediante un gráfico de dispersión y el cálculo del coeficiente de Spearman, evaluamos el grado de acuerdo entre ambas metodologías. 
 ```{r}
 # =========================================================================
 # ANÁLISIS 1: MATRIZ DE CORRELACIÓN Y DISPERSIÓN (NRC vs ia)
@@ -517,8 +460,10 @@ grafico_comparativa <- ggplot(data_comparativa, aes(x = valencia, y = valencia_i
 
 print(grafico_comparativa)
 ```
+La correlación obtenida (0.114) revela una discrepancia fundamental: ambos modelos están interpretando el mismo corpus de manera muy distinta, lo que subraya el impacto de evaluar el contexto (IA) frente al simple conteo de palabras (NRC).
 
 
+Este bloque genera una comparativa longitudinal del sentimiento detectado por ambos modelos. Para poder visualizar ambas métricas (que tienen distribuciones diferentes) en un mismo eje, se ha aplicado una estandarización estadística (Z-Score). Además, se emplea una media móvil de 7 días (rollmean) para filtrar el ruido diario y extraer la tendencia subyacente. El objetivo visual es monitorizar si la IA detecta con mayor sensibilidad y precisión los episodios históricos de pánico o euforia en la comunidad en comparación con el algoritmo léxico clásico.
 ```{r}
 # =========================================================================
 # ANÁLISIS 2: EVOLUCIÓN TEMPORAL COMPARADA
@@ -558,6 +503,9 @@ grafico_temporal_ia <- ggplot(data_temporal_comparada, aes(x = fecha, y = Tenden
 
 print(grafico_temporal_ia)
 ```
+La visualización temporal revela un profundo desacoplamiento entre ambas metodologías. En momentos críticos de alta volatilidad (como se observa a finales de 2025 y principios de 2026), el modelo clásico (NRC) registra picos de positividad exactamente en los mismos periodos donde la IA detecta desplomes hacia el pánico y la negatividad extrema. Esto demuestra empíricamente que el diccionario tradicional fracasa al interpretar la ironía colectiva en fases de crisis, validando a la IA como un termómetro temporal infinitamente más preciso para el mercado.
+
+
 
 ```{r}
 # 1. ANÁLISIS DE EMOCIONES GENERAL (ia) -------------------------------
@@ -580,6 +528,8 @@ ggplot(totales_emociones_ia, aes(x = reorder(emocion_ia, valor), y = valor, fill
     caption = "Fuente: Elaboración propia a partir de inferencia con LLM"
   )
 ```
+A diferencia de la sección anterior, donde el diccionario clásico (NRC) diagnosticaba un foro dominado por la "Confianza" y la "Anticipación", la IA revela que el verdadero clima emocional está liderado por el "Miedo" (Fear) y el "Enfado" (Anger). Esto demuestra empíricamente que el enfoque léxico tradicional estaba malinterpretando la jerga cripto y el sarcasmo, validando la necesidad de usar Inteligencia Artificial para entender el sentimiento real del foro.
+
 
 ```{r}
 # 2. SCORE VS VALENCIA (ia) -------------------------------------------
@@ -604,6 +554,8 @@ ggplot(data_score_ia, aes(x = valencia_ia, y = score)) +
     caption = label_cor_ia
   )
 ```
+Al igual que ocurría con el algoritmo clásico (NRC), la correlación de Spearman es prácticamente nula (-0.05) y la línea de tendencia es plana. Esto confirma que la popularidad de un post es independiente de su carga emocional. Sin embargo, la gran diferencia radica en la densidad visual: mientras el NRC amontonaba los datos en la neutralidad (0), la IA desplaza la inmensa mayoría de la masa discursiva hacia la negatividad extrema (-3 a -5). Esto demuestra que, aunque el pánico no asegure "likes", es el estado base de la comunicación en la comunidad.
+
 
 
 ```{r}
@@ -638,6 +590,8 @@ comparativa_hilos_ia |>
     y = NULL
   )
 ```
+El gráfico evidencia una segmentación temática radical. Mientras que el modelo clásico (NRC) diluía el sentimiento mostrando mezclas homogéneas de emociones en casi todos los hilos (debido al conteo aislado de palabras), la IA detecta una polarización absoluta. Hilos específicos (ej. quiebras bancarias o regulaciones) saturan la métrica al 100% en "Miedo" o "Enfado". Esto demuestra que la IA comprende el contexto global de la noticia y confirma que los usuarios reaccionan con un consenso emocional abrumador ante estímulos externos concretos.
+
 
 
 ```{r}

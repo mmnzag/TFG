@@ -1,24 +1,20 @@
 ---
-title: "Carga y preprocesamiento de datos"
-format:
-  html:
-    theme: default
-    highlight-style: github
+ title: "Carga y preprocesamiento de datos"
+ subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+ author: "Marta Muñoz Aguilar"
+ date: "`r Sys.Date()`"
+ format:
+   html:
+     toc: true
+     toc-depth: 3
+     code-fold: show
+     theme: cosmo
+     highlight-style: dracula
 ---
-# ---
-# title: "Carga y preprocesamiento de datos"
-# subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
-# author: "Marta Muñoz Aguilar"
-# date: "`r Sys.Date()`"
-# format:
-#   html:
-#     toc: true
-#     toc-depth: 3
-#     code-fold: show
-#     theme: cosmo
-#     highlight-style: dracula
-# ---
 
+# Configuración y carga de datos
+
+Carga de librerías especializadas en minería de datos de Reddit (`RedditExtractoR`), manipulación de datos (`tidyverse`), análisis de redes (`igraph`) y procesamiento de lenguaje natural (`tm`, `textstem`). Se implementa un sistema de caché local para evitar descargas redundantes.
 
 ```{r}
 library(RedditExtractoR)
@@ -29,9 +25,8 @@ library(tm) # text mining
 library(textstem) # Para lematización
 ```
 
-## Carga de datos
+Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología.
 
-Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología
 ```{r}
 archivo_datos <- "data/reddit_thread_crypto.rds"
 
@@ -40,13 +35,6 @@ if (file.exists(archivo_datos)) {
   message("--- ARCHIVO ENCONTRADO: Cargando datos locales ---")
   hilos <- readRDS(archivo_datos)
 } else {
-  # Si no existe, intentamos descargarlo
-  # hilos <- find_thread_urls(
-  #   keywords = "AGI",           # La palabra mágica: Inteligencia Artificial General. Despierta tanto a utópicos como a catastrofistas.
-  #   subreddit = "singularity",  # El foro donde la gente cree que la IA es una religión
-  #   sort_by = "comments",       # ¡CRÍTICO! Pedimos que nos traiga los hilos ordenados por mayor cantidad de pelea/debate, no por "likes".
-  #   period = "year"             # Cogemos un año entero para asegurar volumen
-  # )
   hilos <- find_thread_urls(
     keywords = "crypto", 
     subreddit = "technology", # Un foro más técnico y polarizado
@@ -61,8 +49,10 @@ head(hilos)
 
 ```
 
+# Selección estratégica de hilos
 
-Calculamos el acumulado de comentarios para cubrir el 70% del volumen total del subreddit
+En lugar de una selección arbitraria, se calcula el volumen acumulado de comentarios. Esto permite identificar los hilos que concentran la mayor parte de la conversación (70-80%), asegurando que la muestra sea representativa del debate total.
+
 ```{r}
 
 hilos_ordenados <- hilos |> 
@@ -78,6 +68,7 @@ message(paste("Seleccionados", nrow(hilos_seleccionados), "hilos para cubrir el 
 ```
 
 Se descargan los comentarios de los hilos y su contenido
+
 ```{r}
 # Descarga de contenido
 path_comentarios <- "data/reddit_comments.rds"
@@ -92,8 +83,10 @@ if (file.exists(path_comentarios)) {
 comentarios <- contenido$comments
 ```
 
+# Descarga y limpieza estructural
 
-Se limpian los datos quitando los posts borrados y además, añadiremos una columna con el id del comentario padre de forma que si alguien responde al comentario "1", su id será "1_1"
+Descarga del contenido detallado de los hilos. Se realiza una limpieza de estructura eliminando usuarios eliminados y bots (`AutoModerator`). Se reconstruye la jerarquía de la conversación mediante la creación de la columna `parent_id` a partir del ID de comentario de forma que si un usuario responde al comentario "1", su id será "1_1"
+
 ```{r}
 #Limpieza de estructura (SNA y Textos)
 clean_data <- comentarios |>
@@ -106,27 +99,27 @@ clean_data <- comentarios |>
 ```
 
 Para hacer un análisis de texto (NLP) se usa la columna comment.
+
 ```{r}
 head(comentarios$comment)
 ```
 
 Para analizar redes sociales se usan la columna author
+
 ```{r}
 head(comentarios$author)
 
 ```
 
 Para ver sentimientos se analiza cómo cambia el texto en función de score (votos positivos/negativos).
+
 ```{r}
 head(comentarios$score)
 ```
 
-## Preparación de datos
-Para ello, vamos a separar la preparación en dos partes: una para los textos y otra para las relaciones entre usuarios.
+# Preparación para análisis de redes
 
-### Redes Sociales
-Para esta parte, vamos a crear un dataset con los emisores y receptores usando las columnas *author*, *comment_id* y *parent_id*.
-Para ello, creamos un nuevo dataset que contiene el emisor (hijo) y el receptor (padre) que limpiamos posteriormente
+Construcción de una red de interacciones tipo emisor-receptor. Se vinculan las respuestas con sus comentarios originales mediante un `left_join`, eliminando hilos huérfanos y autorespuestas para garantizar métricas de centralidad precisas.
 
 ```{r}
 data_sna <- clean_data |>
@@ -140,9 +133,10 @@ data_sna <- clean_data |>
 saveRDS(data_sna, "data/data_sna.rds")
 ```
 
-### Procesamiento de texto
+# Preprocesamiento de texto y lematización
 
-Primero, se limpia el texto usando expresiones regulares para eliminar todo lo que no sean caracteres y lematización para reducir las palabras a su raíz
+Se realiza un doble flujo de limpieza: - **Optimizado:** Eliminación de URLs y caracteres no alfanuméricos seguido de una lematización para agrupar términos por su raíz semántica.
+
 ```{r}
 # Limpieza previa con expresiones regulares para quitar basura de internet
 data_texto <- clean_data |>
@@ -155,7 +149,7 @@ data_texto <- clean_data |>
 saveRDS(data_texto, "data/data_texto_procesado.rds")
 ```
 
-
+- **Normalizado:** Creación de un Corpus y una Matriz Documento-Término (DTM) filtrando términos de baja frecuencia (dispersión \< 99%) para el modelado de temas (LDA).
 
 ```{r}
 # Creamos el Corpus de texto que usa el paquete 'tm'
@@ -177,11 +171,10 @@ dtm <- DocumentTermMatrix(corpus)
 dtm_reducida <- removeSparseTerms(dtm, 0.99) 
 ```
 
-Una vez procesado el texto, se convierte a los formatos finales para cada parte
+# Formateo para análisis específicos
 
-#### Modelado de temas
+Generación de datasets finales: - `dtm_lda`: Matriz filtrada sin documentos vacíos para modelos de tópicos.
 
-Se eliminan filas vacías 
 ```{r}
 filas_con_palabras <- rowSums(as.matrix(dtm_reducida)) > 0
 dtm_lda <- dtm_reducida[filas_con_palabras, ]
@@ -190,10 +183,8 @@ dtm_lda <- dtm_reducida[filas_con_palabras, ]
 saveRDS(dtm_lda, "data/dtm_lda.rds")
 ```
 
+- `textos_sentimiento`: Texto con limpieza ligera para preservar la carga emocional necesaria en el análisis de sentimientos.
 
-#### Análisis de sentimientos
-
-Se usa un vector de textos limpios
 ```{r}
 textos_sentimiento <- clean_data |>
   # Limpieza LIGERA (Para Sentimientos)
@@ -204,8 +195,3 @@ textos_sentimiento <- clean_data |>
 
 saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
 ```
-
-
-#### Análisis formal de conceptos
-
-En el caso de FCA, se creará la estructura de datos más tarde, ya que se usará datos de fases anteriores. 

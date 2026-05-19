@@ -1,6 +1,15 @@
 ---
-title: "Análisis formal de Conceptos"
-format: html
+ title: "Análisis de conceptos formales"
+ subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+ author: "Marta Muñoz Aguilar"
+ date: "`r Sys.Date()`"
+ format:
+   html:
+     toc: true
+     toc-depth: 3
+     code-fold: show
+     theme: cosmo
+     highlight-style: dracula
 ---
 
 ```{r}
@@ -8,6 +17,7 @@ library(tidyverse)
 library(stringr)
 library(fcaR)
 library(tidytext)
+library(visNetwork)
 library(hassediagrams)
 library(hasseDiagram)
 library(httr2)
@@ -18,8 +28,21 @@ tabla_roles <- readRDS("data/tabla_roles.rds")
 data_texto <- readRDS("data/data_texto_procesado.rds")
 data_sentim <- readRDS("data/data_sentim.rds")
 nombres_temas <- readRDS("data/nombres_temas.rds")
+
+mi_api_key <- keyring::key_get(service = "groq", username = "mi_cuenta_api")
 ```
 
+
+
+# Integración y binarización del conjunto de datos
+
+En esta fase, unificamos las tres dimensiones de nuestro análisis (modelado de temas, análisis de sentimiento y métricas de red) en una única estructura de datos. Dado que el Análisis de Conceptos Formales (FCA) requiere un contexto formal estrictamente binario (presencia o ausencia de un atributo), procedemos a discretizar las variables continuas:
+
+- Métricas de red e impacto: Se aplica el tercer cuartil (el 25% superior) como umbral para identificar a los usuarios de "Alta Influencia" y los comentarios de "Alto Impacto".
+
+- Emociones y Sentimiento: Se binarizan evaluando la valencia neta (positiva, negativa o neutra) y la presencia de al menos una iteración de las ocho emociones básicas.
+
+- Temas (LDA): Se asigna un 1 si la probabilidad de que el comentario pertenezca a un tema supera el 15%.
 
 ```{r}
 # 1. Extraer las probabilidades de temas (Gamma)
@@ -127,48 +150,22 @@ matriz_fca_final <- as.matrix(matriz_fca_limpia)
 ```
 
 
-```{r}
-# Carga esta librería para simplificar
-library(fastDummies)
 
-df_fca <- df_integrado |>
-  mutate(
-    Autor_Alta_Influencia = as.numeric(PageRank >= quantile(PageRank, 0.75, na.rm = TRUE)),
-    Autor_Alto_Puente = as.numeric(Intermediacion >= quantile(Intermediacion, 0.75, na.rm = TRUE)),
-    Coment_Alto_Impacto = as.numeric(score >= quantile(score, 0.75, na.rm = TRUE)),
-    
-    # Valencia neta: simplificamos usando case_when
-    Sent_Muy_Positivo = as.numeric(valencia >= 3),
-    Sent_Muy_Negativo = as.numeric(valencia <= -3),
-    Sent_Neutro = as.numeric(valencia > -1 & valencia < 1),
-    
-    # Emociones: automatizamos la binarización de todas a la vez
-    across(c(trust, anticipation, fear, anger, joy, sadness, surprise, disgust), 
-           ~ as.numeric(.x > 0), .names = "Emocion_{.col}")
-  ) |>
-  # Generar dummies para Roles y Comunidades automáticamente
-  dummy_cols(select_columns = c("Rol", "Comunidad"), 
-             remove_selected_columns = TRUE)
-
-# Para los temas, mejor usa un umbral dinámico o el máximo por fila
-# Si un comentario tiene 0.16 en todos, no es de ninguno realmente.
-temas_cols <- nombres_temas
-df_fca[, paste0("Tema_", temas_cols)] <- lapply(df_temas[temas_cols], function(x) as.numeric(x > 0.15))
-```
-
-
+En esta celda inicializamos el motor matemático de FCA para extraer todas las estructuras subyacentes de la red. El algoritmo calcula dos elementos clave: los Conceptos Formales (grupos cerrados de usuarios y atributos) y las Implicaciones (reglas lógicas de causa y efecto del tipo $A \rightarrow B$).
 ```{r}
 # Inicializar el Contexto Formal en fcaR
 fc <- FormalContext$new(matriz_fca_final)
+fc$clarify()
 
 # Extraer conceptos
 fc$find_concepts()
 
 # Extraer implicaciones
 fc$find_implications()
+
 ```
 
-
+# Cálculo de implicaciones e interpretación asistida por IA
 ```{r}
 # Ver las reglas generadas
 print(head(fc$implications))
@@ -183,11 +180,80 @@ fc$implications$apply_rules(c("reduction",
 
 cat("Tras eliminar redundancias, quedan", fc$implications$cardinality(), "reglas esenciales.\n")
 
-
-cat("Antes de calcular la base canónica, hay", fc$implications$cardinality(), "reglas.\n")
-
-cat("Tras calcular la base canónica, quedan", fc$implications$cardinality(), "reglas.\n")
 ```
+
+
+Dado que el algoritmo puede generar miles de reglas matemáticas difíciles de interpretar de forma aislada, aplicamos el siguiente flujo computacional:
+
+Filtro de Soporte: Nos quedamos únicamente con las reglas que tienen un soporte superior al 10% (0.1). Esto elimina el ruido estadístico y asegura que solo analizamos patrones de comportamiento masivo, no anécdotas aisladas.
+
+Traducción Semántica: Convertimos estas reglas lógicas a texto plano y las enviamos a un Modelo de Lenguaje (Llama 3 vía Groq). La IA actúa como un puente semántico, traduciendo la sintaxis formal a conclusiones legibles sobre psicología de masas y dinámicas de la red social.
+
+```{r}
+# 1. Extraer las reglas y filtrarlas (para no gastar tokens en reglas irrelevantes)
+# Filtramos por confianza alta para que la IA solo analice patrones reales
+# reglas_filtradas <- fc$implications[fc$implications$confidence() > 0.8]
+indices <- which(fc$implications$support() > 0.1)
+
+# 2. Creamos el subconjunto de reglas usando esos índices
+reglas_filtradas <- fc$implications[indices]
+
+# Convertir las reglas a un formato de texto legible
+# Esto creará una lista de: "Atributos_A -> Atributos_B"
+texto_reglas <- capture.output(print(reglas_filtradas))
+texto_reglas_unificado <- paste(texto_reglas, collapse = "\n")
+
+# 2. Configurar el Prompt
+prompt_fca <- paste(
+  "Eres un experto en Análisis de Redes Sociales y Psicología de Masas.",
+  "He realizado un Análisis de Conceptos Formales (FCA) sobre datos de Reddit.",
+  "Las reglas que verás a continuación siguen el formato 'Antecedente -> Consecuente'.",
+  "Tu tarea es traducir cada regla lógica a una conclusión narrativa en ESPAÑOL.",
+  "Explica qué significa socialmente que esos atributos aparezcan juntos.",
+  "Sé breve (1 o 2 frases por regla) y profesional.",
+  "Aquí están las reglas:",
+  texto_reglas_unificado
+)
+
+# 3. Llamada a la API
+respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
+  req_headers(
+    `Authorization` = paste("Bearer", mi_api_key)
+  ) |>
+  req_body_json(list(
+    model = "llama-3.3-70b-versatile",
+    messages = list(list(role = "user", content = prompt_fca)),
+    temperature = 0.5 # Subimos un poco la temperatura para que el lenguaje sea más natural
+  )) |>
+  req_perform()
+
+# 4. Procesar y ver el resultado
+interpretacion_fca_imp <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
+cat(interpretacion_fca_imp)
+```
+Los resultados obtenidos son tremendamente reveladores. La IA ha logrado identificar mecánicas sociales complejas de forma autónoma. Por ejemplo, ha deducido lógicamente que la etiqueta de red "Broker" implica directamente una alta capacidad de puenteo (Autor_Alto_Puente), validando el papel de estos usuarios como conectores estructurales. Además, ha detectado patrones puramente emocionales, revelando que cuando un usuario regular combina confianza, alegría y sorpresa, desencadena matemáticamente un clima de anticipación y engagement en el resto de la comunidad.
+
+
+```{r}
+# Guardar la respuesta en un archivo Markdown con la fecha
+fecha_actual <- format(Sys.time(), "%Y%m%d_%H%M")
+nombre_archivo <- paste0("data/Analisis_Implicaciones_IA_", fecha_actual, ".md")
+
+writeLines(interpretacion_fca, con = nombre_archivo)
+cat("\n[INFO] El análisis se ha guardado correctamente en:", nombre_archivo, "\n")
+```
+
+
+# Extracción de conceptos
+Una vez que el algoritmo matemático ha calculado el retículo, el siguiente paso es extraer los "Conceptos Formales". En nuestro caso de estudio, un concepto es básicamente un perfil de usuario: un grupo de personas que comparten exactamente el mismo conjunto de comportamientos, temas y emociones.
+
+Para que estos resultados sean interpretables, este bloque de código realiza una transformación de los datos en bruto:
+
+1. Convierte el soporte matemático (un porcentaje) en el número real y absoluto de comentarios que pertenecen a ese grupo.
+
+2. Traduce la matriz binaria interna de R en una cadena de texto legible (ej. "Alta Influencia + Emoción Miedo").
+
+3. Construye una tabla ordenada de mayor a menor tamaño para visualizar rápidamente cuáles son las dinámicas y subculturas más dominantes dentro de la red social analizada.
 
 ```{r}
 # 1. Obtener el soporte (número de comentarios) de cada concepto
@@ -219,61 +285,57 @@ head(tabla_conceptos, 10)
 
 
 
-```{r}
-# Supongamos que quieres solo los conceptos que aparecen en al menos el 5% de los comentarios
-soporte_minimo <- 0.2
-
-# Filtramos el conjunto de conceptos
-conceptos_reducidos <- fc$concepts[fc$concepts$support() > soporte_minimo]
-
-cat("Has pasado de", fc$concepts$size(), "a", conceptos_reducidos$size(), "conceptos.")
-
-fc$plot(conceptos_reducidos)
-```
+## Visualización
 
 
 ```{r}
-# 1. Extraer las reglas y filtrarlas (para no gastar tokens en reglas irrelevantes)
-# Filtramos por confianza alta para que la IA solo analice patrones reales
-# reglas_filtradas <- fc$implications[fc$implications$confidence() > 0.8]
-indices <- which(fc$implications$support() > 0.1)
-
-# 2. Creamos el subconjunto de reglas usando esos índices
-reglas_filtradas <- fc$implications[indices]
-
-# Convertir las reglas a un formato de texto legible
-# Esto creará una lista de: "Atributos_A -> Atributos_B"
-texto_reglas <- capture.output(print(reglas_filtradas))
-texto_reglas_unificado <- paste(texto_reglas, collapse = "\n")
-
-# 2. Configurar el Prompt
-prompt_fca <- paste(
-  "Eres un experto en Análisis de Redes Sociales y Psicología de Masas.",
-  "He realizado un Análisis de Conceptos Formales (FCA) sobre datos de Reddit.",
-  "Las reglas que verás a continuación siguen el formato 'Antecedente -> Consecuente'.",
-  "Tu tarea es traducir cada regla lógica a una conclusión narrativa en ESPAÑOL.",
-  "Explica qué significa socialmente que esos atributos aparezcan juntos.",
-  "Sé breve (1 o 2 frases por regla) y profesional.",
-  "Aquí están las reglas:",
-  texto_reglas_unificado
+# Sumamos las columnas para ver la frecuencia de cada atributo
+resumen_atributos <- data.frame(
+  Atributo = colnames(matriz_fca_final),
+  Frecuencia = colSums(matriz_fca_final),
+  Porcentaje = round((colSums(matriz_fca_final) / nrow(matriz_fca_final)) * 100, 1)
 )
 
-# 3. Llamada a la API
-respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(
-    `Authorization` = paste("Bearer", Sys.getenv("GROQ_API_KEY"))
-  ) |>
-  req_body_json(list(
-    model = "llama-3.3-70b-versatile",
-    messages = list(list(role = "user", content = prompt_fca)),
-    temperature = 0.5 # Subimos un poco la temperatura para que el lenguaje sea más natural
-  )) |>
-  req_perform()
-
-# 4. Procesar y ver el resultado
-interpretacion_fca <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
-cat(interpretacion_fca)
+# resumen_atributos <- resumen_atributos[order(-resumen_atributos$Porcentaje), ]
+resumen_atributos[order(resumen_atributos$Atributo),]
+# 
+# DT::datatable(resumen_atributos, 
+#               caption = "Tabla Descriptiva: Distribución de Atributos en la Red")
 ```
+
+```{r}
+# --- VISUALIZACIÓN DEL RETÍCULO (Contexto Reducido) ---
+# Seleccionamos solo 6 atributos clave para que el gráfico sea legible en el TFG
+atributos_top <- c("Autor_Alta_Influencia", "Autor_Alto_Puente", 
+                   "Coment_Alto_Impacto", "Emocion_Alegria", 
+                   "Tema_BlockchainTech", "Tema_DebtCrisis")
+
+# Verificamos que los atributos existen en la matriz
+atributos_presentes <- intersect(atributos_top, colnames(matriz_fca_final))
+
+matriz_plot <- matriz_fca_final[, atributos_presentes]
+rownames(matriz_plot) <- rep("", nrow(matriz_plot))
+# Creamos un mini-contexto solo para la visualización
+fc_plot <- FormalContext$new(matriz_plot)
+fc_plot$find_concepts()
+
+fc_plot$concepts$size()
+
+# Ploteamos sin las etiquetas de los comentarios para mayor limpieza
+fc_plot$concepts$plot()
+```
+
+
+
+
+# Análisis automatizado de patrones estructurales
+En este último bloque damos el salto definitivo de los datos crudos a la interpretación sociológica. Dado que el retículo completo puede contener cientos de conceptos formales, aplicamos un filtro estricto para aislar únicamente las dinámicas de grupo más relevantes:
+
+- Filtro de complejidad: Nos quedamos solo con conceptos que agrupen al menos 3 atributos simultáneos, evitando perfiles demasiado genéricos o triviales.
+
+- Filtro de relevancia: Exigimos que el patrón esté respaldado por un mínimo de 5 comentarios reales, descartando comportamientos anecdóticos.
+
+Una vez aislados y ordenados los 20 perfiles más dominantes de la red, los empaquetamos en un formato de texto estructurado y realizamos una petición a la API de Groq. Utilizando técnicas de Prompt Engineering, configuramos un modelo de Inteligencia Artificial (Llama 3) para que actúe como un sociólogo computacional. El resultado final es una tabla Markdown lista para leer, donde la IA cruza nuestras métricas de red, temas y sentimientos para explicarnos el papel exacto que juega cada perfil de usuario dentro de la comunidad.
 
 ```{r}
 # 1. Obtenemos la matriz de intensiones
@@ -321,14 +383,27 @@ if(length(indices_interesantes) > 0) {
 }
 
 # 1. Definimos el prompt definitivo
+# prompt_ia_conceptos <- paste(
+#   "Eres un analista experto en sociología digital y análisis de redes sociales (SNA) en Reddit.",
+#   "He realizado un Trabajo de Fin de Grado usando Análisis de Conceptos Formales (FCA) para integrar métricas de red, Topic Modeling y Análisis de Sentimientos.",
+#   "A continuación te presento los patrones estructurales más relevantes de mi red. Cada patrón muestra los atributos que aparecen juntos simultáneamente y el número de comentarios que respaldan esa estructura.",
+#   "Tu tarea es 'traducir' cada patrón a una conclusión analítica clara y profesional.",
+#   "Por ejemplo, si un patrón une 'Alta_Influencia', 'Tema_Crash' y 'Sent_Muy_Negativo', puedes interpretarlo como: 'Los líderes de opinión están capitalizando el tema del crash del mercado para generar un discurso pesimista y alarmista'.",
+#   "Por favor, redacta un párrafo breve (2-3 líneas) por cada patrón explicando la dinámica social que representa.",
+#   "Patrones detectados:\n",
+#   texto_final_ia
+# )
+
 prompt_ia_conceptos <- paste(
-  "Eres un analista experto en sociología digital y análisis de redes sociales (SNA) en Reddit.",
-  "He realizado un Trabajo de Fin de Grado usando Análisis de Conceptos Formales (FCA) para integrar métricas de red, Topic Modeling y Análisis de Sentimientos.",
-  "A continuación te presento los patrones estructurales más relevantes de mi red. Cada patrón muestra los atributos que aparecen juntos simultáneamente y el número de comentarios que respaldan esa estructura.",
-  "Tu tarea es 'traducir' cada patrón a una conclusión analítica clara y profesional.",
-  "Por ejemplo, si un patrón une 'Alta_Influencia', 'Tema_Crash' y 'Sent_Muy_Negativo', puedes interpretarlo como: 'Los líderes de opinión están capitalizando el tema del crash del mercado para generar un discurso pesimista y alarmista'.",
-  "Por favor, redacta un párrafo breve (2-3 líneas) por cada patrón explicando la dinámica social que representa.",
-  "Patrones detectados:\n",
+  "Actúa como un sociólogo computacional experto en análisis de discurso en Reddit.",
+  "Contexto: He analizado una comunidad de criptomonedas/finanzas usando FCA.",
+  "Objetivo: Interpretar 'Conceptos Formales' (clústeres lógicos de atributos).",
+  "Instrucciones:",
+  "1. Identifica el perfil del usuario (¿Es un líder de opinión, un 'troll', un usuario escéptico?).",
+  "2. Relaciona la métrica de red con la emoción (ej. 'Los brokers de información suelen propagar miedo para ganar relevancia').",
+  "3. Usa terminología académica (Capital social, polarización, sesgo de confirmación).",
+  "4. Formatea tu respuesta estrictamente como una tabla Markdown con las siguientes columnas: | Patrón (Atributos) | Soporte (Comentarios) | Interpretación Sociológica |.",
+  "Aquí están los patrones detectados:\n",
   texto_final_ia
 )
 
@@ -336,7 +411,7 @@ prompt_ia_conceptos <- paste(
 # Nota: Asegúrate de tener tu API key cargada con Sys.setenv(GROQ_API_KEY = "tu_clave")
 respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
   req_headers(
-    `Authorization` = paste("Bearer", Sys.getenv("GROQ_API_KEY"))
+    `Authorization` = paste("Bearer",mi_api_key)
   ) |>
   req_body_json(list(
     model = "llama-3.3-70b-versatile",
@@ -346,313 +421,14 @@ respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
   req_perform()
 
 # 3. Extraemos y mostramos la respuesta en la consola
-interpretacion_fca <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
+interpretacion_fca_conc <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
 
-cat("\n--- ANÁLISIS DE LA IA PARA TU TFG ---\n\n")
-cat(interpretacion_fca)
+cat("\n--- ANÁLISIS DE LA IA ---\n\n")
+cat(interpretacion_fca_conc)
 ```
+La tabla superior muestra la interpretación automatizada de los 20 patrones de comportamiento más dominantes en la red, generada por el modelo Llama 3 a partir de los Conceptos Formales exactos. Los resultados revelan una clara dicotomía en el comportamiento de la comunidad:
 
-<!-- ```{r} -->
-<!-- # --- 1. PREPARACIÓN DE LA MATRIZ FCA INTEGRADA --- -->
+Por un lado, los patrones con mayor soporte (presentes en más de 100 comentarios) están fuertemente dominados por emociones de "Confianza", "Anticipación" y "Alegría". La IA interpreta esto como un mecanismo de creación de capital social, donde los usuarios regulares retroalimentan el optimismo (probablemente ante subidas del mercado o anuncios tecnológicos), actuando como conectores de información.
 
-<!-- # 1. Binarizamos los Tópicos (Dejamos el umbral en 0.15 como tenías) -->
-<!-- matriz_probabilidades <- modelo_lda@gamma -->
-<!-- matriz_topicos_fca <- ifelse(matriz_probabilidades > 0.15, 1, 0) -->
-<!-- colnames(matriz_topicos_fca) <- paste0("Topico_", 1:ncol(matriz_topicos_fca)) -->
-
-<!-- df_topicos <- as.data.frame(matriz_topicos_fca) -->
-<!-- # Rescatamos los IDs de los comentarios que sobrevivieron al LDA -->
-<!-- indices_que_quedaron <- as.numeric(modelo_lda@documents) -->
-<!-- df_topicos$comment_id <- data_texto$comment_id[indices_que_quedaron] -->
-
-<!-- # 2. Binarizamos los Sentimientos -->
-<!-- # (Solo si es muy positivo o muy negativo para evitar el ruido del cero) -->
-<!-- df_sentimientos <- data.frame( -->
-<!--    comment_id    = data_sentim$comment_id, -->
-<!--    Sent_Positivo = ifelse(data_sentim$valencia > 0.5, 1, 0), -->
-<!--    Sent_Negativo = ifelse(data_sentim$valencia < -0.5, 1, 0) -->
-<!-- ) -->
-
-<!-- # 3. Unimos ambas dimensiones (¡La verdadera integración!) -->
-<!-- datos_fca_completos <- inner_join(df_topicos, df_sentimientos, by = "comment_id") -->
-
-<!-- # Convertimos a matriz matemática quitando la columna ID -->
-<!-- matriz_final_fca <- as.matrix(datos_fca_completos |> select(-comment_id)) -->
-<!-- rownames(matriz_final_fca) <- paste0("Doc_", datos_fca_completos$comment_id) -->
-<!-- ``` -->
-
-
-<!-- ```{r} -->
-<!-- # --- 2. CÁLCULO DE CONCEPTOS E IMPLICACIONES (fcaR) --- -->
-
-<!-- # Creamos el contexto formal -->
-<!-- fc <- FormalContext$new(matriz_final_fca) -->
-
-<!-- # Encontramos los conceptos -->
-<!-- fc$find_concepts() -->
-
-<!-- # Encontramos las reglas (Implicaciones) -->
-<!-- fc$find_implications() -->
-
-<!-- # Capturamos la salida matemática de las reglas en una variable de texto -->
-<!-- # (Cogemos solo las 20 primeras para no saturar) -->
-<!-- salida_matematica <- capture.output(fc$implications$print()) -->
-<!-- texto_reglas <- paste(head(salida_matematica, 20), collapse = "\n") -->
-
-<!-- cat("✅ Reglas matemáticas generadas y listas para la IA.\n") -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- # --- 3. TRADUCCIÓN DE REGLAS CON INTELIGENCIA ARTIFICIAL --- -->
-<!-- library(httr) -->
-<!-- library(jsonlite) -->
-
-<!-- # Recuperamos la API Key que guardaste en el .Renviron -->
-<!-- mi_api_key <- Sys.getenv("GEMINI_API_KEY") -->
-
-<!-- traducir_reglas_fca <- function(reglas_fca, api_key) { -->
-<!--   # El prompt donde le explicamos a la IA qué significan las variables -->
-<!--   prompt <- paste( -->
-<!--     "Eres un sociólogo de datos experto en Reddit. He aplicado Análisis Formal de Conceptos (FCA) y he obtenido las siguientes reglas lógicas matemáticas.", -->
-<!--     "Tus instrucciones:", -->
-<!--     "1. Ignora las reglas que no tengan sentido o sean obvias.", -->
-<!--     "2. Traduce las 3 reglas más interesantes a conclusiones sociológicas claras en español.", -->
-<!--     "3. Redáctalo en formato de 'Insights' con viñetas, usando un tono académico.", -->
-<!--     "4. Recuerda que 'Sent_Negativo' y 'Sent_Positivo' indican la carga emocional del comentario.", -->
-<!--     "\nAquí están las reglas matemáticas:\n", reglas_fca -->
-<!--   ) -->
-
-<!--   url_gemini <- paste0("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=", api_key) -->
-
-<!--   cuerpo_peticion <- list( -->
-<!--     contents = list(list(parts = list(list(text = prompt)))), -->
-<!--     generationConfig = list(temperature = 0.4) -->
-<!--   ) -->
-
-<!--   # Sistema anti-saturación (Retry Loop) -->
-<!--   for (intento in 1:4) { -->
-<!--     respuesta <- POST(url = url_gemini, content_type_json(), encode = "json", body = cuerpo_peticion) -->
-<!--     contenido <- content(respuesta, as = "parsed", type = "application/json") -->
-
-<!--     if (is.null(contenido$error)) break -->
-
-<!--     if (intento < 4) { -->
-<!--       cat(sprintf("\n[Aviso] API Ocupada (Intento %d). Esperando 5s...\n", intento)) -->
-<!--       Sys.sleep(5) -->
-<!--     } else { -->
-<!--       return("Error en la API. Intenta ejecutar el bloque de nuevo.") -->
-<!--     } -->
-<!--   } -->
-
-<!--   texto_final <- contenido$candidates[[1]]$content$parts[[1]]$text -->
-<!--   return(trimws(texto_final)) -->
-<!-- } -->
-
-<!-- # Llamamos a la IA y le pasamos nuestras reglas -->
-<!-- cat("\n🤖 Pensando... Traducción de insights en proceso...\n\n") -->
-<!-- insights_sociologicos <- traducir_reglas_fca(texto_reglas, mi_api_key) -->
-
-<!-- # Imprimimos el resultado formateado -->
-<!-- cat(insights_sociologicos) -->
-<!-- ``` -->
-
-
-
-<!-- # Visualización de retículos de concpetos -->
-<!-- ```{r} -->
-<!-- # --- VISUALIZACIÓN DEL RETÍCULO (DIAGRAMA DE HASSE) --- -->
-
-<!-- # Filtramos para no saturar el gráfico (solo conceptos con > 3% de soporte) -->
-<!-- conceptos_filtrados <- fc$concepts[fc$concepts$support() > 0.05] -->
-<!-- conceptos_filtrados$plot() -->
-
-<!-- # El método plot de fcaR genera un Diagrama de Hasse automático -->
-<!-- # Usamos el motor 'visNetwork' si está disponible para que sea interactivo -->
-<!-- fc$concepts$plot() -->
-
-<!-- fc$plot() -->
-
-<!-- # Interpretación para el TFG: -->
-<!-- # Los nodos superiores representan temas transversales. -->
-<!-- # Los nodos inferiores representan nichos donde los temas y sentimientos se mezclan de forma única. -->
-<!-- ``` -->
-<!-- ```{r} -->
-<!-- library(ggplot2) -->
-<!-- library(dplyr) -->
-
-<!-- conceptos_fuertes <- which(fc$concepts$support() > 0.05) -->
-
-<!-- # 1. Reconstruimos la tabla resumen (por si no la tenías cargada en memoria) -->
-<!-- resumen_conceptos <- data.frame( -->
-<!--   ID = conceptos_fuertes, -->
-<!--   Soporte = fc$concepts$support()[conceptos_fuertes] * 100, -->
-<!--   Perfil_Logico = sapply(conceptos_fuertes, function(i) { -->
-<!--     attrs <- colnames(matriz_final_fca)[fc$concepts$intents()[, i] == 1] -->
-<!--     paste(attrs, collapse = " + ") -->
-<!--   }) -->
-<!-- ) |>  -->
-<!--   arrange(desc(Soporte)) -->
-
-<!-- # 2. Nos quedamos con los 10 perfiles principales para que el gráfico respire -->
-
-
-<!-- # Filtramos la tabla resumen para quedarnos SOLO con los cruces lógicos (Conceptos combinados) -->
-<!-- datos_combinados <- resumen_conceptos |>  -->
-<!--   filter(str_detect(Perfil_Logico, "\\+"))  -->
-
-<!-- # Nos quedamos con los 10 cruces principales -->
-<!-- datos_grafico <- head(datos_combinados, 10) -->
-
-<!-- # (Y a partir de aquí lanzas el mismo código de ggplot de antes, usando este nuevo datos_grafico) -->
-<!-- # 3. Generamos el gráfico nivel TFG -->
-<!-- grafico_fca <- ggplot(datos_grafico, aes(x = reorder(paste("Concepto", ID), Soporte), y = Soporte, fill = Soporte)) + -->
-<!--   geom_col(color = "black", alpha = 0.85) + -->
-
-<!--   # Ponemos el texto de la regla lógica dentro de la barra -->
-<!--   geom_text(aes(label = Perfil_Logico), y = 0.5, hjust = 0, color = "white", fontface = "bold", size = 4) + -->
-
-<!--   coord_flip() + -->
-<!--   scale_fill_gradient(low = "#4f94d4", high = "#0b2e59") + # Colores serios y académicos -->
-<!--   theme_minimal(base_size = 13) + -->
-<!--   labs( -->
-<!--     title = "Estructura Lógica del Debate (Análisis Formal de Conceptos)", -->
-<!--     subtitle = "Perfiles temático-emocionales con mayor prevalencia en la comunidad", -->
-<!--     x = "Concepto Formal (Nicho)", -->
-<!--     y = "Porcentaje de Comentarios que cumplen la regla (%)" -->
-<!--   ) + -->
-<!--   theme( -->
-<!--     legend.position = "none", -->
-<!--     plot.title = element_text(face = "bold", margin = margin(b = 10)), -->
-<!--     axis.text.y = element_text(face = "bold", color = "black") -->
-<!--   ) -->
-
-<!-- # Imprimimos el gráfico -->
-<!-- print(grafico_fca) -->
-<!-- ``` -->
-
-
-<!-- ```{r} -->
-<!-- # Elegimos un concepto interesante (por ejemplo, el concepto 5) -->
-<!-- id_concepto <- 5 -->
-<!-- indices_comentarios <- fc$concepts$extents()[, id_concepto] -->
-
-<!-- # Extraemos los comentarios reales de Reddit para ver qué dicen de verdad -->
-<!-- ejemplos_reales <- data_texto$comment[indices_que_quedaron][indices_comentarios == 1] -->
-<!-- head(ejemplos_reales, 3) -->
-<!-- ``` -->
-
-
-<!-- ```{r} -->
-<!-- # Visualizar la matriz de conceptos vs atributos -->
-<!-- library(pheatmap) -->
-<!-- intensiones_matriz <- as.matrix(fc$concepts$intents()) -->
-<!-- pheatmap(intensiones_matriz[, conceptos_fuertes],  -->
-<!--          main = "Mapa de Calor de Perfiles Lógicos", -->
-<!--          color = c("white", "steelblue")) -->
-<!-- ``` -->
-
-
-<!-- # Tabla de "Perfiles de Usuario" -->
-<!-- ```{r} -->
-<!-- # Creamos una tabla resumen de los "Conceptos Relevantes" -->
-<!-- conceptos_fuertes <- which(fc$concepts$support() > 0.05) -->
-<!-- resumen_conceptos <- data.frame( -->
-<!--   ID = conceptos_fuertes, -->
-<!--   Soporte = fc$concepts$support()[conceptos_fuertes] * 100, -->
-<!--   Perfil_Logico = sapply(conceptos_fuertes, function(i) { -->
-<!--     attrs <- colnames(matriz_final_fca)[fc$concepts$intents()[, i] == 1] -->
-<!--     paste(attrs, collapse = " + ") -->
-<!--   }) -->
-<!-- ) |>  -->
-<!--   arrange(desc(Soporte)) -->
-
-<!-- # Mostramos los 10 principales perfiles detectados -->
-<!-- knitr::kable(head(resumen_conceptos, 10),  -->
-<!--              caption = "Perfiles Lógicos extraídos mediante FCA (Integración NLP-Sentimiento)") -->
-<!-- ``` -->
-
-
-
-<!-- ```{r} -->
-<!-- # 1. Extraemos la matriz de probabilidades (Gamma) -->
-<!-- matriz_probabilidades <- modelo_lda@gamma -->
-
-<!-- # 2. Identificamos QUÉ documentos sobrevivieron al modelo -->
-<!-- # El modelo guarda internamente los índices originales de los documentos procesados -->
-<!-- indices_que_quedaron <- as.numeric(modelo_lda@documents) -->
-
-<!-- # 3. Filtramos tus datos originales para que coincidan EXACTAMENTE con el modelo -->
-<!-- # Esto elimina cualquier comentario que el LDA haya ignorado -->
-<!-- data_alineada <- data_texto[indices_que_quedaron, ] -->
-
-<!-- # 4. Ahora sí, binarizamos los tópicos -->
-<!-- umbral <- 0.15 -->
-<!-- matriz_binaria <- ifelse(matriz_probabilidades > umbral, 1, 0) -->
-
-<!-- # 5. Asignamos los nombres sin miedo a los NA -->
-<!-- # Usamos el ID del comentario que ya hemos alineado en el paso 3 -->
-<!-- rownames(matriz_binaria) <- paste0("Doc_", data_alineada$comment_id) -->
-<!-- colnames(matriz_binaria) <- paste0("Topico_", 1:ncol(matriz_binaria)) -->
-
-<!-- # 6. Verificación de seguridad -->
-<!-- # Si esto da 0, hemos vencido a los padres -->
-<!-- sum(is.na(rownames(matriz_binaria))) -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- # Crear el contexto -->
-<!-- fc <- FormalContext$new(matriz_binaria) -->
-
-<!-- # Calcular conceptos (Agrupaciones de comentarios que comparten temas) -->
-<!-- fc$find_concepts() -->
-<!-- fc$concepts -->
-
-<!-- # Calcular implicaciones (Reglas lógicas: "Si habla de T1, entonces habla de T2") -->
-<!-- fc$find_implications() -->
-<!-- fc$implications -->
-<!-- ``` -->
-
-
-<!-- ```{r} -->
-<!-- # ¿Cuántos tópicos tiene cada comentario de media? -->
-<!-- # Si es cercano a 1, no habrá implicaciones porque los temas no se cruzan. -->
-<!-- print(mean(rowSums(matriz_binaria))) -->
-
-<!-- # Ver el soporte de cada tópico (en qué % de comentarios aparece) -->
-<!-- print(fc$attributes_support()) -->
-<!-- ``` -->
-
-
-<!-- ```{r} -->
-<!-- # Extraer datos de conceptos con soporte > 5% -->
-<!-- soportes <- fc$concepts$support() -->
-<!-- conceptos_fuertes <- which(soportes > 0.05) -->
-<!-- nombres_atributos <- colnames(matriz_binaria) -->
-
-<!-- df_plot <- data.frame(Concepto = character(), Soporte = numeric(), Perfil = character()) -->
-
-<!-- for (i in conceptos_fuertes) { -->
-<!--   # Extraer qué tópicos forman este concepto -->
-<!--   atributos_binarios <- fc$concepts$intents()[, i] -->
-<!--   perfil_tematico <- paste(nombres_atributos[atributos_binarios == 1], collapse = " + ") -->
-
-<!--   if (nchar(perfil_tematico) > 0) { -->
-<!--     df_plot <- rbind(df_plot, data.frame( -->
-<!--       Concepto = paste("C.", i), -->
-<!--       Soporte = soportes[i] * 100, -->
-<!--       Perfil = perfil_tematico -->
-<!--     )) -->
-<!--   } -->
-<!-- } -->
-
-<!-- # Gráfico de barras horizontales -->
-<!-- ggplot(df_plot, aes(x = reorder(Concepto, Soporte), y = Soporte, fill = Soporte)) + -->
-<!--   geom_col() + -->
-<!--   geom_text(aes(label = Perfil), hjust = -0.1, size = 3) + -->
-<!--   coord_flip() + -->
-<!--   theme_minimal() + -->
-<!--   labs(title = "Estructura Temática por Comentario", -->
-<!--        x = "ID Concepto Formal", -->
-<!--        y = "% de Comentarios (Soporte)") -->
-<!-- ``` -->
+Por otro lado, a partir del patrón con soporte de 92 comentarios, observamos la irrupción de la "Ira", el "Miedo" y la "Tristeza". El modelo sociológico asocia correctamente estas agrupaciones formales a momentos de tensión, identificando la presencia de dinámicas de polarización y sesgo de confirmación alimentadas por usuarios escépticos o trolls. En resumen, la automatización confirma empíricamente que la red se divide entre la euforia colectiva y el escepticismo reactivo.
 

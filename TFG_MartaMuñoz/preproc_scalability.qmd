@@ -1,0 +1,122 @@
+---
+ title: "Carga y preprocesamiento de datos"
+ subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+ author: "Marta Muñoz Aguilar"
+ date: "`r Sys.Date()`"
+ format:
+   html:
+     toc: true
+     toc-depth: 3
+     code-fold: show
+     theme: cosmo
+     highlight-style: dracula
+---
+
+
+# Configuración y carga de datos
+
+```{r}
+library(tidyverse)
+library(tidytext) # La joya de la corona para NLP moderno
+library(tm)       # Solo lo mantenemos para la conversión final de la matriz
+library(textstem)
+
+# (En la memoria explicamos que esta es la Fase 2: Ingesta Masiva)
+# Carga de la muestra de estrés de Kaggle (50.000 filas)
+dataset_bruto <- read.csv("data/reddit_opinion_ru_ua.csv")
+
+# Añadimos un ID único a cada comentario, vital para el topic modeling
+dataset_bruto <- dataset_bruto |> 
+  mutate(doc_id = row_number())
+
+cat("Hilos encontrados para el nuevo debate:", nrow(dataset_bruto))
+head(dataset_bruto)
+
+
+# Extraer una muestra aleatoria de 50.000 filas nada más cargar
+set.seed(123) # Garantiza que siempre extraigas los mismos 50.000 comentarios
+datos <- dataset_bruto |> 
+  slice_sample(n = 50000)
+```
+
+
+
+# Preparación para análisis de redes
+
+No hay atributo parent_id, así que si dos usuarios (author_name) han comentado dentro del mismo hilo (post_id), asumimos que comparten un contexto o un debate, y se traza una conexión entre ellos.
+Cuantos más hilos compartan en común, más fuerte será su vínculo (weight)
+```{r} 
+participaciones <- datos |>
+  select(author_name, post_id) |>
+  filter(!is.na(author_name) & author_name != "" & author_name != "[deleted]") |>
+  distinct()
+
+# 2. Magia Relacional: Cruzamos la tabla consigo misma por el 'post_id'
+# Esto conecta a todos los usuarios que han comentado en el mismo post
+edges_co_participacion <- participaciones |>
+  inner_join(participaciones, by = "post_id", relationship = "many-to-many") |>
+  # Usamos '<' en lugar de '!=' para evitar aristas duplicadas (A->B y B->A) 
+  # y para eliminar conexiones de un usuario consigo mismo
+  filter(author_name.x < author_name.y) |>
+  # Renombramos para que tidygraph y tu script de redes lo entiendan
+  select(from = author_name.x, to = author_name.y)
+
+datos_sna <- edges_co_participacion |>
+  count(from, to, name = "weight")
+
+
+saveRDS(datos_sna, "data/data_sna.rds")
+```
+
+
+# Preprocesamiento de texto y lematización
+
+```{r}
+textos_sentimiento <- datos |>
+  mutate(
+    # Quitamos URLs
+    texto_limpio = str_remove_all(self_text, "http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"),
+    # Quitamos menciones de Reddit (u/usuario)
+    texto_limpio = str_remove_all(texto_limpio, "u/[A-Za-z0-9_-]+"),
+    # Quitamos basura HTML y puntuación
+    texto_limpio = str_remove_all(texto_limpio, "&amp;|&lt;|&gt;"),
+    texto_limpio = str_replace_all(texto_limpio, "[^[:alnum:][:space:]]", " "),
+    texto_limpio = str_squish(tolower(texto_limpio))
+  ) |>
+  filter(texto_limpio != "")
+
+
+saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
+```
+
+
+
+
+```{r}
+# Descargamos las stop words en inglés
+stop_words_en <- get_stopwords(language = "en")
+
+# 1. Tokenizamos y limpiamos a nivel de palabra
+tokens_limpios <- textos_sentimiento |>
+  unnest_tokens(word, texto_limpio) |>
+  anti_join(stop_words_en, by = "word") |>
+  filter(!str_detect(word, "^[0-9]+$")) |> # Eliminamos números sueltos
+  mutate(word = lemmatize_words(word))     # Lematizamos (ej. running -> run)
+
+# 2. Contamos frecuencias
+word_counts <- tokens_limpios |>
+  count(doc_id, word, sort = TRUE)
+
+# 3. Casteamos a Matriz Documento-Término (DTM) compatible con topicmodels
+dtm_bruta <- word_counts |>
+  cast_dtm(document = doc_id, term = word, value = n)
+
+# 4. Reducimos la dispersidad (como hacías tú, es fundamental)
+# Nos quedamos con palabras que aparezcan en al menos el 1% de los documentos
+dtm_lda <- removeSparseTerms(dtm_bruta, 0.99)
+
+cat("Matriz lista para el modelo LDA. Dimensiones:", dim(dtm_lda)[1], "documentos x", dim(dtm_lda)[2], "términos.\n")
+
+saveRDS(dtm_lda, "data/dtm_lda.rds")
+```
+

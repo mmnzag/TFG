@@ -26,103 +26,16 @@ library(ggraph)
 library(igraph)
 library(LDAvis)
 library(servr)
+library(patchwork) 
+
 # Carga de librerías necesarias para llamadas a API
 library(httr2)
 library(jsonlite)
 
 dtm_lda <- readRDS("data/dtm_lda.rds") 
 data_texto <- readRDS("data/data_texto_procesado.rds")
-```
 
-
-<!-- # Tuning -->
-<!-- Para esta parte primero vamos a hacer un tuning para encontrar el valor óptimo de k, siendo este el número de temas -->
-<!-- ```{r} -->
-<!-- # Ejecutamos la función que probará diferentes valores de K -->
-<!-- # Vamos a probar desde 2 hasta 15 tópicos. -->
-<!-- resultados_tuning <- FindTopicsNumber( -->
-<!--   dtm_lda, -->
-<!--   topics = seq(from = 2, to = 15, by = 1), -->
-<!--   metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"), -->
-<!--   method = "Gibbs", -->
-<!--   control = list(seed = 123), -->
-<!--   mc.cores = 2 -->
-<!-- ) -->
-
-<!-- # Mostramos la tabla con los valores exactos -->
-<!-- print(resultados_tuning) -->
-
-<!-- # Generamos el gráfico para decidir visualmente -->
-<!-- FindTopicsNumber_plot(resultados_tuning) -->
-<!-- ``` -->
-
-<!-- Los siguietes médotos maximizan el número -->
-<!-- Griffiths2004: Se basa en la verosimilitud logarítmica. El valor máximo suele indicar el número ideal de temas. -->
-
-<!-- Deveaud2014: Mide la divergencia entre la distribución de palabras de los tópicos. Queremos que los temas sean lo más distintos posible (máxima divergencia). -->
-
-
-<!-- Minimizar: -->
-<!-- CaoJuan2009: Mide la similitud entre tópicos. Si es muy alta, los temas están solapados. Buscamos el valor mínimo para tener temas bien diferenciados. -->
-
-<!-- Arun2010: Se basa en la divergencia de Kullback-Leibler. Al igual que la anterior, buscamos el punto mínimo. -->
-
-<!-- ```{r} -->
-<!-- # Aplicamos el modelo LDA.  -->
-<!-- # La 'k = 4' significa que le pedimos al algoritmo que busque 4 temas distintos. -->
-<!-- modelo_lda <- LDA(dtm_lda, k = 10, control = list(seed = 123)) -->
-
-<!-- # Extraemos las 8 palabras más representativas de cada uno de los 4 temas -->
-<!-- terminos_top <- terms(modelo_lda, 8) -->
-
-<!-- # cat("\n--- LOS 4 TEMAS PRINCIPALES DEL DEBATE ---\n") -->
-<!-- print(terminos_top) -->
-<!-- ``` -->
-
-
-<!-- # Limpieza -->
-
-```{r}
-# data("stop_words")
-# extra_stops_words <- tribble(
-#   ~word, ~lexicon,
-#   "just", "custom",
-#   "dont", "custom",
-#   "can",  "custom",
-#   "get",  "custom",
-#   "will", "custom",
-#   "like", "custom",
-#   "also", "custom",
-#   "even", "custom",
-#   "now",  "custom",
-#   "say",  "custom",
-#   "going", "custom",
-#   "031re", "custom" # Por si acaso sobrevive algún residuo
-# )
-# 
-# # 3. Combinamos ambas listas
-# stop_words <- stop_words |>
-#   bind_rows(extra_stops_words)
-
-```
-
-
-<!-- La función unnest_tokens es la piedra angular del análisis de texto en el ecosistema Tidytext de R. Su trabajo consiste en tomar una columna de texto "bruto" (frases o párrafos) y dividirla en unidades individuales llamadas tokens (que suelen ser palabras sueltas). -->
-
-<!-- Se observa que hay palabras que tienen el mismo significado, como *job* y *jobs* -->
-```{r}
-# # Tokenizamos y filtramos
-# clean_text_dtm <- data_texto |>
-#   unnest_tokens(word, comment) |>
-#   anti_join(stop_words, by = "word") |>
-#   # Opcional: quitar palabras de menos de 3 caracteres (suelen ser ruido)
-#   filter(nchar(word) > 2) |>
-#   mutate(word = lemmatize_words(word))
-# 
-# # Volvemos a agrupar si necesitas el texto por documento
-# lda_data_final <- clean_text_dtm |>
-#   group_by(comment_id) |>
-#   summarise(texto_final = paste(word, collapse = " "))
+mi_api_key <- keyring::key_get(service = "groq", username = "mi_cuenta_api")
 ```
 
 # Preprocesamiento y filtrado TF-IDF
@@ -265,7 +178,6 @@ Para eliminar el sesgo subjetivo en el nombramiento de los temas, automatizamos 
 3 Procesa y limpia la respuesta mediante expresiones regulares (regex) para aislar los nombres y mapearlos dinámicamente a las columnas de nuestra matriz.El LLM ha devuelto etiquetas altamente precisas y contextualizadas (ej. Trump Scam, Money Laundering), demostrando una profunda comprensión del léxico del foro.
 
 ```{r}
-mi_api_key <- Sys.getenv("GROQ_API_KEY")
 
 # 2. Preparamos las palabras de cada tópico en formato texto
 # Esto convierte la matriz de términos en cadenas, ej: "people, job, time..."
@@ -292,10 +204,10 @@ prompt_unico <- paste(
 # 2. Llamada única a la API (usando Groq como ejemplo)
 respuesta_batch <- request("https://api.groq.com/openai/v1/chat/completions") |>
   req_headers(
-    `Authorization` = paste("Bearer", Sys.getenv("GROQ_API_KEY"))
+    `Authorization` = paste("Bearer", mi_api_key)
   ) |>
   req_body_json(list(
-    model = "llama-3.3-70b-versatile",
+    model = "llama-3.1-8b-instant",
     messages = list(list(role = "user", content = prompt_unico)),
     temperature = 0.2 # Temperatura baja para consistencia
   )) |>
@@ -354,24 +266,6 @@ ggplot(top_terms, aes(x = beta, y = term, fill = factor(topic))) +
     x = "Probabilidad Beta",
     y = NULL
   )
-# # Extraemos las probabilidades beta (palabra-tópico)
-# top_terms <- tidy(modelo_lda, matrix = "beta") |>
-#   group_by(topic) |>
-#   slice_max(beta, n = 10) |> 
-#   ungroup() |>
-#   arrange(topic, -beta)
-# 
-# # Graficamos
-# top_terms |>
-#   mutate(term = reorder_within(term, beta, topic)) |>
-#   ggplot(aes(beta, term, fill = factor(topic))) +
-#   geom_col(show.legend = FALSE) +
-#   facet_wrap(~ topic, scales = "free") +
-#   scale_y_reordered() +
-#   theme_minimal() +
-#   labs(title = "Top 10 términos por Tópico",
-#        x = "Probabilidad (Beta)",
-#        y = NULL)
 ```
 El gráfico valida visualmente el trabajo de etiquetado del LLM. Podemos observar cómo la IA ha captado perfectamente los matices: el tema Trump Scam está dominado por términos de estafas rápidas (trump, pull, rug), mientras que Coin Scams agrupa fraudes más estructurales (scheme, empire, dump). A su vez, temas técnicos como Blockchain Tech agrupan el léxico de infraestructura (proof, store, quantum).
 
@@ -431,9 +325,7 @@ ggplot(impacto_real, aes(x = factor(topic_name), y = impacto_total, fill = facto
        x = "Tópico", 
        y = "Votos Totales Ponderados")
 ```
-<!-- Los tópicos de alta prevalencia y bajo impacto, como el 3, son aquellos de los que la gente habla mucho pero no generan traccion, temas triviales. -->
 
-<!-- Los tópicos de alta prevalencia y alto impacto, como el 1 y 2, son los que generan mucho contenido así como interés. -->
 
 Al observar ambas gráficas, descubrimos una profunda desconexión entre el "ruido" y la "señal".
 
@@ -478,50 +370,228 @@ En lugar de forzar a la IA a clasificar comentarios dentro de los clústeres des
 Extraemos una muestra aleatoria de 100 comentarios (un volumen adecuado para la ventana de contexto de Llama 3) y se la enviamos en bloque. El prompt instruye al modelo para que actúe como un sociólogo de datos: debe leer la muestra completa, detectar los patrones recurrentes por sí mismo y devolvernos los temas principales que considere más relevantes, ignorando el ruido.
 
 ```{r}
-library(tidyverse)
-library(httr2)
 
-# 1. Preparamos una muestra densa (100-150 comentarios es ideal para la memoria del LLM)
-set.seed(456)
+# 1. Preparamos la muestra
+set.seed(123) # Para que te salgan los mismos si lo repites
 muestra_descubrimiento <- data_texto |> 
-  sample_n(100) |> 
+  sample_n(125) |> 
   pull(comment)
 
-# Unimos todos los comentarios separados por guiones para que la IA sepa dónde empieza y acaba cada uno
 texto_unido <- paste(paste("-", muestra_descubrimiento), collapse = "\n")
 
-# 2. El Prompt de Descubrimiento (Aquí está la magia que pides)
-prompt_descubrimiento <- paste(
-  "Eres un analista de datos experto en sociología de foros financieros y criptomonedas.",
-  "A continuación te proporciono una muestra aleatoria de 100 comentarios en crudo extraídos de una comunidad online.",
-  "Tu tarea es realizar un 'Topic Modeling' cualitativo. Lee todos los comentarios y extrae los temas PRINCIPALES que están debatiendo los usuarios.",
-  "Para cada tema que descubras, proporciona estrictamente este formato:",
-  "- **[Nombre Corto del Tema en Inglés]**: [Descripción de 1 o 2 líneas en español explicando de qué trata y qué tono usan los usuarios].",
-  "REGLA 1: No uses temas que yo te haya dado previamente. Descúbrelos tú mismo leyendo el texto.",
-  "REGLA 2: Ignora los comentarios basura o el ruido. Céntrate en los grandes patrones.",
-  "Comentarios a analizar:\n",
-  texto_unido,
+# 2. Prompt de Sistema (Reglas de hierro y One-Shot Prompting)
+prompt_sistema <- paste(
+  "Eres un analista de datos experto en sociología de foros financieros.",
+  "Tu única tarea es hacer un Topic Modeling cualitativo de los comentarios que te pase el usuario.",
+  "",
+  "FORMATO ESTRICTO OBLIGATORIO (Una lista de viñetas):",
+  "- **[TITLE IN ENGLISH]**: [Descripción en español de 1 o 2 líneas].",
+  "",
+  "EJEMPLO PERFECTO DE SALIDA:",
+  "- **Market Volatility**: Los usuarios expresan pánico ante las caídas abruptas de precios.",
+  "- **Scam Alerts**: La comunidad advierte sobre nuevos esquemas fraudulentos.",
+  "",
+  "REGLAS INQUEBRANTABLES:",
+  "1. El título DENTRO de los asteriscos (**) DEBE estar 100% en inglés.",
+  "2. La descripción DESPUÉS de los dos puntos (:) DEBE estar 100% en español.",
+  "3. Comienza directamente con la lista de viñetas. NO incluyas introducciones ni conclusiones.",
   sep = "\n"
 )
 
-# 3. Petición única a la API de Groq
-cat("Enviando muestra a la IA para descubrimiento de tópicos...\n")
-api_key <- Sys.getenv("GROQ_API_KEY")
+# 3. Petición a la API (Separando Sistema y Usuario)
+cat("Enviando muestra a la IA (Llama 70B) para descubrimiento de tópicos...\n")
+
 
 req_descubrimiento <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(`Authorization` = paste("Bearer", api_key)) |>
+  req_headers(`Authorization` = paste("Bearer", mi_api_key)) |>
   req_body_json(list(
     model = "llama-3.3-70b-versatile",
     messages = list(
-      list(role = "user", content = prompt_descubrimiento)
+      list(role = "system", content = prompt_sistema),
+      list(role = "user", content = paste("Comentarios a analizar:\n", texto_unido))
     ),
-    temperature = 0.3 # Un poco de temperatura para permitir síntesis creativa, pero sin alucinar
+    temperature = 0.1 
   )) |>
   req_perform()
 
-# 4. Imprimir el resultado (La IA te devolverá un texto formateado)
+# 4. Imprimir el resultado
 resultado_ia <- resp_body_json(req_descubrimiento)$choices[[1]]$message$content
 cat("\n--- TÓPICOS DESCUBIERTOS POR LA IA ---\n\n")
 cat(resultado_ia)
+```
+
+## Análisis de prevalencia e impacto con IA
+Una vez que el LLM ha descubierto orgánicamente los temas principales, procedemos a clasificar una muestra de los datos y a medir su impacto. Al no trabajar con distribuciones de probabilidad probabilísticas (Gamma), la Prevalencia se calcula como la frecuencia relativa pura (porcentaje de comentarios por tema), y el Impacto se calcula como la suma directa de los scores de los comentarios asignados unívocamente a cada categoría.
+
+```{r}
+
+# 1. ACTUALIZA ESTO con los nombres que te haya devuelto la IA en el paso anterior
+# temas_ia_puro <- c(
+#   "1" = "Market Volatility",
+#   "2" = "Scam Alerts",
+#   "3" = "Bullish Sentiment",
+#   "4" = "Cryptocurrency Criticism",
+#   "5" = "Regulation and Security",
+#   "6" = "Investment Strategies",
+#   "7" = "Quantum Computing Threat",
+#   "8" = "Lack of Understanding"
+# )
+
+temas_ia_puro <- c("Crypto Scams",
+  "Market Volatility",
+  "Lack of Regulation",
+  "Money Laundering",
+  "Technological Limitations",
+  "Investment Risks",
+  "Social Impact",
+  "Government Intervention",
+  "Educational Value",
+  "Security Concerns"
+)
+
+# 2. Reutilizamos el bucle de clasificación de antes (simplificado)
+# Para la memoria, 500 comentarios es una muestra estadísticamente aceptable
+set.seed(999)
+datos_analisis_ia <- data_texto |> 
+  sample_n(500) |> 
+  mutate(tema_ia = NA_character_)
+
+prompt_sistema <- paste(
+  "Clasifica el comentario en UNA de estas categorías:",
+  paste(temas_ia_puro, collapse = "\n"),
+  "Responde ÚNICAMENTE con el nombre del tema. Nada de texto extra.",
+  sep = "\n"
+)
+
+cat("Clasificando comentarios en los nuevos temas de la IA...\n")
+for (i in 1:nrow(datos_analisis_ia)) {
+  comentario_actual <- datos_analisis_ia$comment[i]
+  if (is.na(comentario_actual) || nchar(comentario_actual) < 10) {
+    datos_analisis_ia$tema_ia[i] <- as.character(length(temas_ia_puro)) # Asignar a Ruido
+    next
+  }
+  
+  req <- request("https://api.groq.com/openai/v1/chat/completions") |>
+    req_headers(`Authorization` = paste("Bearer", mi_api_key)) |>
+    req_body_json(list(
+      # model = "llama-3.3-70b-versatile",
+      model = "llama-3.1-8b-instant",
+      messages = list(
+        list(role = "system", content = prompt_sistema),
+        list(role = "user", content = paste("Comentario:", comentario_actual))
+      ),
+      temperature = 0.0, max_tokens = 5
+    )) |> req_error(is_error = function(resp) FALSE)
+  
+  resp <- req_perform(req)
+  if (resp_status(resp) == 200) {
+    # Extraemos la cadena de texto completa y le quitamos espacios extra
+    respuesta_ia <- stringr::str_trim(resp_body_json(resp)$choices[[1]]$message$content)
+    
+    cat(i,". ",respuesta_ia,"----" ,comentario_actual, "\n" )
+    
+    # Asignamos el texto directamente
+    datos_analisis_ia$tema_ia[i] <- respuesta_ia
+  } else {
+    datos_analisis_ia$tema_ia[i] <- "Error de API"
+  }
+  Sys.sleep(3)
+}
+
+datos_analisis_ia <- datos_analisis_ia |>
+  filter(tema_ia %in% temas_ia_puro) 
+
+```
+
+
+```{r}
+# --- GRÁFICO 1: PREVALENCIA (Volumen) ---
+prevalencia_ia <- datos_analisis_ia |>
+  count(tema_ia) |>
+  mutate(porcentaje = n / sum(n) * 100)
+
+p1 <- ggplot(prevalencia_ia, aes(x = reorder(tema_ia, porcentaje), y = porcentaje, fill = tema_ia)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_viridis_d(option = "rocket") +
+  theme_minimal() +
+  labs(title = "Prevalencia Temática (IA Generativa)", x = NULL, y = "Porcentaje de Comentarios (%)")
+
+# --- GRÁFICO 2: IMPACTO SOCIAL (Scores) ---
+impacto_ia <- datos_analisis_ia |>
+  group_by(tema_ia) |>
+  summarise(impacto_total = sum(score, na.rm = TRUE)) # Suma directa, sin multiplicar por Gamma
+
+p2 <- ggplot(impacto_ia, aes(x = reorder(tema_ia, impacto_total), y = impacto_total, fill = tema_ia)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_viridis_d(option = "mako") +
+  theme_minimal() +
+  labs(title = "Impacto Social por Tópico (IA Generativa)", x = NULL, y = "Suma Total de Votos")
+
+# Mostramos los gráficos juntos
+p1 / p2
+```
+
+##Equivalente al gráfico beta
+
+```{r}
+tokens_por_clase_ia <- datos_analisis_ia |>
+  filter(tema_ia != "Ruido / Otro") |>
+  unnest_tokens(word, comment) |>
+  anti_join(stop_words, by = "word") |>
+  anti_join(stopwords_dominio, by = "word") |>
+  filter(nchar(word) > 2) |>
+  mutate(word = textstem::lemmatize_words(word)) |>
+  count(tema_ia, word, sort = TRUE)
+
+# Calculamos el TF-IDF considerando cada tema como un único documento
+ctfidf_ia <- tokens_por_clase_ia |>
+  bind_tf_idf(word, tema_ia, n) |>
+  group_by(tema_ia) |>
+  slice_max(tf_idf, n = 10) |>
+  ungroup() |>
+  mutate(word = reorder_within(word, tf_idf, tema_ia))
+
+# Dibujamos el equivalente al gráfico Beta
+ggplot(ctfidf_ia, aes(x = tf_idf, y = word, fill = tema_ia)) +
+  geom_col(show.legend = FALSE, alpha = 0.8) +
+  facet_wrap(~ tema_ia, scales = "free_y", ncol = 2) +
+  scale_y_reordered() +
+  scale_fill_viridis_d(option = "mako") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.y = element_text(size = 6), strip.text = element_text(face = "bold")) +
+  labs(
+    title = "Términos más discriminatorios por Tópico (c-TF-IDF / Enfoque IA)",
+    subtitle = "Replicación de la importancia de palabras mediante minería de texto por clase",
+    x = "Puntuación c-TF-IDF (Importancia Relativa)",
+    y = NULL
+  )
+```
+
+
+
+```{r}
+# ==============================================================================
+# 2. EQUIVALENTE A LA CORRELACIÓN DE TÓPICOS: RED DE CO-OCURRENCIA DE LA IA
+# ==============================================================================
+# Nota: Para evaluar relaciones sin Gamma, calculamos la correlación de presencia 
+# de términos clave compartidos entre los perfiles de los clústeres de la IA.
+
+correlacion_ia <- ctfidf_ia |>
+  mutate(word_clean = str_remove(as.character(word), "___.+$")) |>
+  widyr::pairwise_cor(item = tema_ia, feature = word_clean, value = tf_idf) |>
+  arrange(desc(correlation))
+
+# Construcción del grafo de red para la sección de IA
+set.seed(123)
+grafo_ia <- graph_from_data_frame(correlacion_ia |> filter(correlation > 0.05), directed = FALSE)
+
+ggraph(grafo_ia, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation, edge_width = correlation), color = "#FF8C00") +
+  geom_node_point(size = 8, color = "#4B0082") +
+  geom_node_text(aes(label = name), repel = TRUE, size = 4, fontface = "bold") +
+  theme_void() +
+  labs(title = "Red de Relación Temática y Solapamiento Semántico (IA Generativa)")
 ```
 
