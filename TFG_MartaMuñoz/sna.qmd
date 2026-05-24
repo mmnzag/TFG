@@ -10,6 +10,9 @@ format:
     code-fold: show
     theme: cosmo
     highlight-style: dracula
+execute:
+  warning: false
+  message: false
 ---
 
 Este cuaderno contiene el flujo de trabajo técnico para el análisis de la red de interacciones de Reddit. El objetivo es procesar los datos crudos, extraer métricas de centralidad basadas en la teoría de Newman y segmentar la red en comunidades estructurales.
@@ -18,65 +21,75 @@ Este cuaderno contiene el flujo de trabajo técnico para el análisis de la red 
 Se carga el dataset y se realiza una limpieza en el grado de actividad
 
 ```{r}
-library(igraph)
-library(tidytext)
+#| warning: false
+
+library(tidygraph)
 library(ggraph)
 library(tidyverse)
 library(viridis)
-library(patchwork)
 library(scales) # escalado de datos
 
 
 # Carga del dataset preprocesado
 data_sna <- readRDS("data/data_sna.rds") 
+data_texto <- readRDS("data/data_sample.rds")
+
+
 ```
 
 # Construcción y filtrado del grafo de interacción
 
 En primer lugar, se genera el objeto igraph dirigido con el fin de conservar la jerarquía de interacción. Como estamos trabajando con un gran volumen de interacciones, se agregan los datos primero, siendo el número de interacciones el peso de la arista
 
+Este bloque realiza un colapso multidimensional del dataframe mediante la agregación de interacciones repetidas entre los mismos nodos, mapeando dicha frecuencia a la variable de peso (weight) de las aristas para mitigar el coste computacional. Acto seguido, se realiza el salto al paradigma de redes instanciando un objeto tbl_graph dirigido y calculando en una sola pasada los descriptores topológicos de centralidad (Grado, Intermediación, Cercanía, PageRank y Vector Propio).
+
 ```{r}
-edges_optimizados <- data_sna |>
+data_sna <- data_sna |>
   count(from, to, name = "weight")
 
-# Vemos cuánto ha encogido
 cat("Filas originales:", nrow(data_sna), "\n")
-cat("Filas optimizadas (aristas únicas):", nrow(edges_optimizados), "\n")
 
-# 2. Creamos el grafo (Ahora será casi instantáneo)
-grafo_reddit <- graph_from_data_frame(edges_optimizados, directed = TRUE)
+grafo_reddit <- as_tbl_graph(data_sna, directed = TRUE) |>
+  activate(nodes) |>
+  mutate(
+    degree = centrality_degree(mode = "all"),
+    betweenness = centrality_betweenness(directed = TRUE),
+    closeness = centrality_closeness(mode = "all"),
+    pagerank = centrality_pagerank(),
+    eigenvector = centrality_eigen()
+  )
 
-cat("Iniciando renderizado... Nodos:", vcount(grafo_reddit), "| Aristas:", ecount(grafo_reddit), "\n")
+# Extraer el número de nodos y aristas de forma tidy
+n_nodos <- grafo_reddit |> activate(nodes) |> as_tibble() |> nrow()
+n_aristas <- grafo_reddit |> activate(edges) |> as_tibble() |> nrow()
+
+cat("Iniciando renderizado... Nodos:", n_nodos, "| Aristas:", n_aristas, "\n")
 ```
-El proceso reduce las 6.300 interacciones iniciales a 6.063 aristas únicas que conectan 739 nodos. Esta baja tasa de compresión (apenas 237 filas redundantes) refleja un patrón de interacción poco recurrente en la red, indicando que los usuarios rara vez intercambian múltiples mensajes con un mismo interlocutor. 
 
 
-Para trabajar con datos relevantes, se creará un subgrafo basado en el número de interacciones (grado) de cada nodo. 
+Para trabajar con datos relevantes, se creará un subgrafo basado en el número de interacciones (grado) de cada nodo.
 
 Para ello, vemos la distribución de los grado y como estamos trabajando con un gran volumen de datos, los escalamos con una transformación logarítmica en el eje X.
+
+
+Este bloque extrae el vector de grado global para evaluar el comportamiento asintótico de la red. Se calcula la media, mediana y rango máximo con el fin de modelar la distribución. Se genera un gráfico de densidad kernel aplicando un escalado logarítmico en el eje de abscisas, técnica computacional requerida para corregir el sesgo impuesto por la estructura de Ley de Potencia típica de las redes sociales digitales.
 ```{r}
-# Extraer los grados del grafo original (antes de filtrar)
-V(grafo_reddit)$degree <- degree(grafo_reddit, mode = "all")
-df_grados <- data.frame(grado = V(grafo_reddit)$degree)
+# Extraer los grados del grafo puramente con tidygraph
+df_grados <- grafo_reddit |>
+  activate(nodes) |>
+  as_tibble() |>
+  select(grado = degree)
 
 # Calcular estadísticos descriptivos
 mediana_grado <- median(df_grados$grado)
 media_grado   <- mean(df_grados$grado)
 
-
-
-ggplot(df_grados, aes(x = grado)) +
-  # Usamos densidad pura
+distribucion_grado <- ggplot(df_grados, aes(x = grado)) +
   geom_density(fill = "steelblue", alpha = 0.5, color = "darkblue", size = 1) +
-  
   geom_vline(aes(xintercept = mediana_grado, linetype = "Mediana"), color = "red", size = 1) +
   geom_vline(aes(xintercept = media_grado, linetype = "Media"), color = "orange", size = 1) +
-  
   scale_linetype_manual(name = "Estadísticos", values = c("Mediana" = "dashed", "Media" = "dotted")) +
-  
-  # EL CAMBIO CRÍTICO: Escala logarítmica en el Eje X
   scale_x_log10(labels = label_number(big.mark = ".", decimal.mark = ",")) +
-  
   theme_minimal() +
   labs(
     title = "Distribución de Grado de la Red de Reddit",
@@ -86,48 +99,42 @@ ggplot(df_grados, aes(x = grado)) +
     caption = "Nota: Eje X en escala logarítmica para visualizar la estructura de Ley de Potencia"
   )
 
+ggsave("images/sna_distribucion_grado.png", plot = distribucion_grado,  dpi = 300)
 
+print(distribucion_grado)
 ```
-La visualización revela una topología multimodal con tres grandes volúmenes de usuarios (esporádicos, medios y recurrentes). Esta representación gráfica es fundamental en la fase de preprocesamiento, ya que permite justificar empíricamente el valor de corte para aislar el núcleo de la red. Se busca el valle de densidad que separa el "ruido" periférico de la masa crítica de usuarios que sostiene el debate, descartando así el uso de estadísticos globales sesgados como la media o la mediana.
 
 
-
-Para ello, definimos las siguientes funciones de obtención del subgrafo y visualización:
+Este bloque define de forma modular la lógica de extracción del subgrafo y el algoritmo de graficado. La función generate_subgraph_advanced ejecuta una poda de aristas débiles por debajo del umbral de peso, recalcula dinámicamente el grado sobre la estructura resultante para evitar distorsiones métricas y purga los componentes aislados. 
+Por su parte, plot_graph encapsula el motor de visualización forzada por gravedad mapeando el tamaño y cromatismo de los nodos de forma proporcional a sus conexiones y aplicando un filtro adaptativo basado en cuantiles ($Q_{0.75}$) para rotular exclusivamente los nodos dominantes.
 ```{r}
 #| warning: false
-generate_subgraph_advanced <- function(umbral_nodos, umbral_aristas, grafo) {
-  
-  # 1. Filtramos las aristas "débiles" (ej: interacciones de 1 o 2 comentarios)
-  # Esto destruirá cientos de miles de líneas irrelevantes
-  grafo_fuerte <- delete_edges(grafo, E(grafo)[weight < umbral_aristas])
-  
-  # 2. Al borrar aristas, muchos nodos se quedarán 'aislados' o bajarán su grado.
-  # Recalculamos el grado para ver quién sigue siendo importante.
-  V(grafo_fuerte)$degree <- degree(grafo_fuerte, mode = "all")
-  
-  # 3. AHORA filtramos por nodos (tu umbral de actividad)
-  grafo_limpio <- induced_subgraph(grafo_fuerte, 
-                                   vids = which(V(grafo_fuerte)$degree > umbral_nodos))
-  
-  # 4. Limpieza final de nodos que hayan quedado con grado 0
-  grafo_limpio <- delete_vertices(grafo_limpio, which(degree(grafo_limpio) == 0))
-  
-  return(grafo_limpio)
+generate_subgraph_advanced <- function(umbral_nodos, umbral_aristas, g) {
+  g |>
+    # 1. Filtrar aristas débiles primero para reducir carga computacional
+    activate(edges) |>
+    filter(weight >= umbral_aristas) |>
+    
+    # 2. Recalcular el grado dinámicamente sobre el grafo resultante
+    activate(nodes) |>
+    mutate(temp_degree = centrality_degree(mode = "all")) |>
+    
+    # 3. Filtrar nodos según el umbral de actividad y aislar (grado > 0)
+    filter(temp_degree > umbral_nodos & temp_degree > 0) |>
+    filter(!node_is_isolated()) |> # Función nativa de tidygraph
+    
+    # Limpiamos variables temporales
+    select(-temp_degree)
 }
 
-
 plot_graph <- function(seed = 123, grafo){
-  #  grafo optimizado
-  set.seed(seed) # Para que la forma del grafo sea siempre la misma al ejecutar
-  layout <- create_layout(grafo, layout = "fr")
-  ggraph(layout) + 
-    # aristas un poco transparentes
+  set.seed(seed) 
+  layout <- create_layout(grafo, layout = "graphopt")
+  plot <- ggraph(layout) + 
     geom_edge_link(alpha = 0.1, color = "gray70") +
+    geom_node_point(aes(size = degree, color = degree,alpha = 0.8), show.legend = TRUE) +
     
-    # nodos con el tamaño y color dependiendo de sus conexiones
-    geom_node_point(aes(size = degree, color = degree), show.legend = TRUE) +
-    
-    # TRUCO ESTRELLA: Solo ponemos el nombre a los que tienen más del perceltil 75 interacciones
+    # TRUCO ESTRELLA: Rotular dominantes
     geom_node_text(aes(label = ifelse(degree > quantile(degree, 0.75), name, NA)),
                    repel = TRUE, 
                    size = 3,
@@ -135,53 +142,70 @@ plot_graph <- function(seed = 123, grafo){
                    color = "black",
                    bg.color = "white", 
                    bg.r = 0.15) +
-    
-    scale_color_viridis_c(option = "plasma") + # Paleta de colores bonita
+    scale_color_viridis_c(option = "plasma") +
+    scale_size_continuous(range = c(1, 8))+
     theme_graph() + 
     labs(title = "Red de interacciones en Reddit",
          subtitle = "Nodos filtrados")
-  
+  return(plot)
 }
-
 ```
-La observación de la curva de densidad permite establecer un umbral de corte basado en la topología real de la red, superando las limitaciones de los estadísticos globales. Se descarta la mediana ($k = 8$) por situarse en plena zona de transición descendente. En su lugar, se fija el umbral de filtrado de nodos en el grado $k = 10$.
 
-Este valor coincide exactamente con el mínimo local (valle) que separa a la población de usuarios esporádicos de la masa principal de usuarios hiperactivos (el tercer pico de la distribución). Aplicar este umbral actúa como un filtro quirúrgico: elimina el ruido topológico de las interacciones casuales y aísla el núcleo duro estructural que sostiene el debate, garantizando la robustez de los algoritmos de detección de comunidades posteriores.
 
-Como se mencionó anteriormente, existe un patrón de interacción poco recurrente en la red, por lo tanto, el umbral de aristas se mantendrá en 1.
+
+
+Se parametriza y ejecuta la función de subgrafiado avanzado fijando un criterio de corte conservador. El bloque realiza la llamada recursiva del script, evalúa por consola la contracción topológica del grafo limpio e invoca al motor estético para proyectar espacialmente la red resultante.
 
 ```{r}
 #| warning: false
 umbral_nodos <- 10
 umbral_aristas <- 1
 grafo_limpio <- generate_subgraph_advanced(umbral_nodos = umbral_nodos,
-                                           umbral_aristas =umbral_aristas,
-                                           grafo = grafo_reddit)
+                                           umbral_aristas = umbral_aristas,
+                                           g = grafo_reddit)
 
-cat("Nodos:", vcount(grafo_limpio), "| Aristas:", ecount(grafo_limpio), "\n")
-plot_graph(grafo=grafo_limpio)
+n_limpios <- grafo_limpio |> activate(nodes) |> as_tibble() |> nrow()
+e_limpios <- grafo_limpio |> activate(edges) |> as_tibble() |> nrow()
+cat("Nodos:", n_limpios, "| Aristas:", e_limpios, "\n")
 
+plot_grafo_limpio <- plot_graph(grafo=grafo_limpio)
+print(plot_grafo_limpio)
+
+ggsave("images/sna_grafo_limpio.png", plot = plot_grafo_limpio,  dpi = 300)
 ```
-La inmensa mayoría de la masa de la red colapsa en un aglomerado central altamente denso. Este núcleo está anclado por una minoría de *super-hubs* (nodos en tonos cálidos con grados superiores a 100). Estos usuarios monopolizan el flujo de información y actúan como atracadores principales de la discusión.
-
-Alrededor y por encima de este eje central, se observan nodos periféricos (tonos oscuros, grado mínimo exigido de 10) que interactúan con el núcleo pero mantienen una posición estructural subordinada, sin formar comunidades satélites independientes.
-
-A nivel puramente espacial, el algoritmo de disposición no logra fracturar la red en islas separadas. Los usuarios, independientemente de su postura sobre las criptomonedas, están convergiendo sobre los mismos hilos y respondiendo a las mismas autoridades, creando una "arena de debate única".
-
-Esta cohesión visual aparente hace imperativa la aplicación de algoritmos de optimización de modularidad. Se requiere una evaluación matemática estricta para determinar si, bajo esta masa densa, existen trincheras ideológicas latentes o si la red carece de segregación comunitaria real.
-
 
 # Métricas Globales de la Red
 
-Antes de segmentar la red en comunidades, evaluamos su estructura global para entender el nivel de cohesión e interacción general:
+Antes de segmentar la red en comunidades, evaluamos su estructura global para entender el nivel de cohesión e interacción general
+
+Aquí calcula de manera síncrona los indicadores macroscópicos que gobiernan la red depurada: densidad del grafo (ratio aristas reales/posibles), reciprocidad (proporción de aristas mutuamente dirigidas), transitividad global (coeficiente de agrupamiento que mide el cierre de tríadas de interconexión) y distancia media (longitud media del camino más corto entre pares de nodos, computada bajo dirección de aristas).
 ```{r}
+# metricas_globales <- data.frame(
+#   Métrica = c("Densidad", "Reciprocidad", "Transitividad", "Distancia Media"),
+#   Valor = c(
+#     edge_density(grafo_limpio),
+#     reciprocity(grafo_limpio),
+#     transitivity(grafo_limpio, type="global"),
+#     mean_distance(grafo_limpio, directed=TRUE)
+#   )
+# )
 metricas_globales <- data.frame(
-  Métrica = c("Densidad", "Reciprocidad", "Transitividad", "Distancia Media"),
+  Métrica = c("Densidad", "Reciprocidad", "Transitividad Local (Promedio)", "Distancia Media"),
   Valor = c(
-    edge_density(grafo_limpio),
-    reciprocity(grafo_limpio),
-    transitivity(grafo_limpio, type="global"),
-    mean_distance(grafo_limpio, directed=TRUE)
+    # Densidad calculada matemáticamente en grafo dirigido
+    with_graph(grafo_limpio, graph_size() / (graph_order() * (graph_order() - 1))),
+    
+    with_graph(grafo_limpio, graph_reciprocity()),
+    
+    # ARREGLO AQUÍ: Forzamos weights = NA para ignorar la fórmula de Barrat
+    grafo_limpio |> 
+      activate(nodes) |> 
+      mutate(t = local_transitivity(weights = NA)) |> 
+      as_tibble() |> 
+      pull(t) |> 
+      mean(na.rm = TRUE),
+      
+    with_graph(grafo_limpio, graph_mean_dist(directed = TRUE))
   )
 )
 
@@ -190,271 +214,346 @@ print(metricas_globales)
 
 
 ```
-El cálculo de las métricas topológicas macroscópicas revela un ecosistema de interacción asimétrico enfocado en la rápida propagación de información. Destaca una reciprocidad extraordinariamente baja (0.065), lo que demuestra matemáticamente un patrón de comunicación unidireccional (*hit-and-run*) donde los usuarios emiten respuestas sin consolidar diálogos de ida y vuelta. Esta dinámica se complementa con una densidad del 4.4% y una transitividad del 0.100, indicando que la red carece de subgrupos locales densamente cohesionados; en su lugar, la estructura depende enteramente de las conexiones centralizadas a través de los *hubs* principales. No obstante, a pesar de esta baja formación de triángulos locales, el subgrafo exhibe un claro efecto de "mundo pequeño" con una distancia media de 3.2, garantizando que cualquier flujo de debate atraviese transversalmente toda la élite del foro en apenas tres saltos.
+
 
 
 
 ## Centralidad
 Implementamos las métricas definidas en el marco teórico de la memoria. Estas métricas permiten identificar diferentes perfiles de influencia.
 
+
+Se recalcula sobre el subgrafo optimizado las variables fundamentales del espacio de red utilizando las implementaciones integradas de tidygraph. Esta aproximación automatiza el cálculo del grado como descriptor de popularidad local, la intermediación como índice de control de flujos informativos, la cercanía para medir la inmediatez de acceso, y las métricas matriciales avanzadas (PageRank y Centralidad de Vector Propio) encargadas de ponderar la influencia en función del prestigio de los vecinos colindantes. Adicionalmente, computa dinámicamente un umbral de corte posicionado en el percentil 90 ($P_{90}$) de intermediación para aislar operacionalmente a los puentes estratégicos de la red.
 ```{r}
-# Implementación de fórmulas de centralidad
-V(grafo_limpio)$degree      <- degree(grafo_limpio, mode = "all")
-V(grafo_limpio)$betweenness <- betweenness(grafo_limpio, directed = TRUE)
-V(grafo_limpio)$closeness   <- closeness(grafo_limpio, mode = "all")
-V(grafo_limpio)$pagerank    <- page_rank(grafo_limpio)$vector
-V(grafo_limpio)$eigenvector <- eigen_centrality(grafo_limpio)$vector
+
+grafo_limpio <- grafo_limpio |>
+  activate(nodes) |>
+  mutate(
+    degree      = centrality_degree(mode = "all"),
+    betweenness = centrality_betweenness(directed = TRUE),
+    closeness   = centrality_closeness(mode = "all"),
+    pagerank    = centrality_pagerank(),
+    eigenvector = centrality_eigen()
+  )
 
 # Umbral para etiquetas dinámicas (Percentil 90 de Intermediación)
-umbral_puente <- quantile(V(grafo_limpio)$betweenness, 0.90)
+umbral_puente <- grafo_limpio |> 
+  activate(nodes) |> 
+  as_tibble() |> 
+  pull(betweenness) |> 
+  quantile(0.90)
 ```
 
 ### Distribución
+
+Este bloque extrae la matriz de atributos de centralidad de los nodos y realiza una pivotación longitudinal (pivot_longer) transformando los vectores métricos en una estructura apilada clave-valor. Esta reorganización relacional permite generar un lienzo multipanel (facet_wrap) mediante histogramas de frecuencias, facilitando la auditoría visual y la comparación simultánea de las colas de distribución y asimetría de cada indicador.
 ```{r}
-df_metrics_long <- data.frame(
-  Grado = V(grafo_limpio)$degree,
-  Intermediacion = V(grafo_limpio)$betweenness,
-  Cercania = V(grafo_limpio)$closeness,
-  PageRank = V(grafo_limpio)$pagerank
-) |>
+df_metrics_long <- grafo_limpio |>
+  activate(nodes) |>
+  as_tibble() |>
+  select(Grado = degree, Intermediacion = betweenness, Cercania = closeness, PageRank = pagerank) |>
   pivot_longer(cols = everything(), names_to = "Metrica", values_to = "Valor")
 
-# Histogramas de distribución
-ggplot(df_metrics_long, aes(x = Valor, fill = Metrica)) +
+distribucion_metrica <- ggplot(df_metrics_long, aes(x = Valor, fill = Metrica)) +
   geom_histogram(bins = 30, show.legend = FALSE) +
   facet_wrap(~Metrica, scales = "free") +
   theme_minimal() +
   labs(title = "Distribución de Métricas de Centralidad",
        subtitle = "Análisis de la estructura de influencia en la red")
+print(distribucion_metrica)
+ggsave("images/sna_distribucion_metrica.png", plot = distribucion_metrica,  dpi = 300)
 ```
-El análisis visual confirma una topología jerárquica y asimétrica propia de redes libres de escala. La Intermediación y el PageRank presentan una distribución de "larga cola", donde el control del flujo y el prestigio se concentran en una minoría ínfima de usuarios frente a una mayoría con valores nulos. Esta asimetría se replica en el Grado, validando que la actividad recae sobre unos pocos *hubs* hiperactivos. Por el contrario, la Cercanía exhibe una distribución normalizada, lo que demuestra que, tras el filtrado inicial, los usuarios del núcleo mantienen una distancia topológica equitativa entre sí, facilitando la propagación interna de información.
 
 
 
 # Detección de Comunidades y Visualización 
-Este bloque define la función de renderizado encargada de mapear espacialmente las particiones generadas por los algoritmos de detección comunitaria (Louvain y Walktrap). La red se proyecta mediante un algoritmo de minimización de estrés para garantizar la legibilidad y estabilidad espacial de los clústeres, asignando el color según la membresía comunitaria del nodo y escalando su tamaño proporcionalmente a su grado.
+Definimos la función de renderizado encargada de mapear espacialmente las particiones generadas por los algoritmos de detección comunitaria (Louvain y Walktrap). La red se proyecta mediante un algoritmo de minimización de estrés para garantizar la legibilidad y estabilidad espacial de los clústeres, asignando el color según la membresía comunitaria del nodo y escalando su tamaño proporcionalmente a su grado.
 
 La decisión de diseño más crítica es la implementación de un filtro de etiquetado selectivo: para evitar la saturación visual, el código renderiza exclusivamente los nombres de los usuarios que superan el umbral del percentil 90 de intermediación ($P_{90}$), identificando de un vistazo a los *brokers* fundamentales que actúan como puentes de información entre las diferentes trincheras. 
 
 Por último, la función incrusta dinámicamente el coeficiente de modularidad ($Q$) en el lienzo, proporcionando una métrica cuantitativa inmediata sobre la calidad de la segregación estructural de cada algoritmo.
 
+
+
+Se codifica la función de visualización especializada plot_comunidades. El script computa de manera interna la métrica matemática de modularidad ($Q$) forzando la conversión temporal del objeto de red a una estructura no dirigida bidimensional compatible con modularity(). El motor gráfico emplea un layout de minimización de estrés (layout = 'stress') para optimizar la distancia inter-nodo, inyecta un control de solapamiento tipográfico (check_overlap = TRUE) y oculta la leyenda cromática para focalizar el lienzo en la escala geométrica de popularidad local (Grado).
 ```{r}
-plot_comunidades <- function(graph, algoritmo_obj, titulo) {
-  # Asegurar que la comunidad sea factor para colores discretos
-  V(graph)$community <- as.factor(algoritmo_obj$membership)
+#| fig-width: 12
+#| fig-height: 10
+ 
+plot_comunidades <- function(graph, comunidad_col, titulo, seed = 123) {
+  set.seed(seed)
+  graph <- graph |>
+    activate(nodes) |>
+    mutate(etiqueta_broker = ifelse(betweenness >= umbral_puente, name, NA))
   
-  ggraph(graph, layout = "stress") + 
-    geom_edge_parallel(alpha = 0.03, color = "grey70") + # Aristas más sutiles
-    geom_node_point(aes(color = community, size = degree), show.legend = TRUE) +
-    
-    # Etiquetas más pequeñas y solo las críticas
-    geom_node_text(aes(label = ifelse(betweenness >= umbral_puente, name, NA)),
-                   repel = TRUE, size = 2, fontface = "bold", family = "sans") +
-    
+  # ARREGLO AQUÍ: usamos convert() en lugar de morph() para que with_graph reciba un tbl_graph puro
+  q_val <- graph |> 
+    convert(to_undirected) |> 
+    with_graph(graph_modularity(group = as.factor(!!sym(comunidad_col))))
+  
+  p <- ggraph(graph, layout = "graphopt") + 
+    geom_edge_link(alpha = 0.05, color = "grey70") + 
+    geom_node_point(aes(color = as.factor(.data[[comunidad_col]]), size = degree)) +
+    geom_node_text(aes(label = etiqueta_broker), size = 3, na.rm = TRUE, vjust = -1, color = "black", check_overlap = TRUE) +
     scale_color_viridis_d(option = "turbo") + 
-    theme_graph(base_family = "sans") +
-    
-    # Acortamos textos para ganar espacio horizontal
-    labs(title = titulo,
-         subtitle = paste("Q:", round(modularity(algoritmo_obj), 3)),
-         color = "Clúster",
-         size = "Grado") +
-    
-    # Ajustes de espaciado crítico
+    theme_void() +
+    labs(title = titulo, subtitle = paste("Q:", round(q_val, 3))) +
     theme(
       legend.position = "bottom",
-      legend.box = "vertical",
-      legend.text = element_text(size = 7),
-      legend.title = element_text(size = 8, face = "bold"),
-      plot.title = element_text(size = 12, hjust = 0.5),
-      plot.subtitle = element_text(size = 10, hjust = 0.5),
-      plot.margin = margin(20, 20, 20, 20) # Margen externo de cada gráfico
+      plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 14),
+      plot.background = element_rect(fill = "white", color = NA) 
     ) +
-    # Forzamos que la leyenda de los clústeres no sea una fila infinita
-    guides(color = guide_legend(ncol = 5, override.aes = list(size = 3)))
+    guides(color = "none", size = guide_legend(title = "Grado"))
+    
+  return(p)
 }
 
 ```
 
 
-## Louvain
+## Louvain y Walktrap
+
+
+Este bloque ejecuta en paralelo las tareas de clustering comunitario. En primer lugar, invoca al algoritmo heurístico de Louvain (cluster_louvain) operando sobre una transformación simétrica no dirigida de la red y parametrizando una resolución densa. En segundo lugar, ejecuta el algoritmo Walktrap (cluster_walktrap), el cual explota las propiedades de los paseos aleatorios (random walks) de longitud corta para capturar comunidades basándose en la densidad de vecindarios transitables directos.
 
 ```{r}
-louvain <- cluster_louvain(as_undirected(grafo_limpio)) # louvain trabaja con grafos no dirigidos
-V(grafo_limpio)$community <- as.character(louvain$membership)
-p1 <- plot_comunidades(grafo_limpio, louvain, "Algoritmo Louvain")
 
-m_louvain <- modularity(cluster_louvain(as_undirected(grafo_limpio)))
-cat("Modularidad Louvain:", m_louvain, "\n")
+grafo_limpio <- grafo_limpio |>
+  # Louvain necesita una estructura no dirigida. Usamos morph para transicionar.
+  morph(to_undirected) |>
+  mutate(com_louvain = group_louvain(resolution = 2)) |>
+  unmorph() |>
+  # Walktrap puede aplicarse directamente en la estructura original
+  activate(nodes) |>
+  mutate(com_walktrap = group_walktrap())
 
+df_nodos <- grafo_limpio |> activate(nodes) |> as_tibble()
 
+cat("Louvain ha detectado ", max(df_nodos$com_louvain), " comunidades \n")
+cat("Walktrap ha detectado ", max(df_nodos$com_walktrap), " comunidades \n")
 ```
-La segmentación del ecosistema de debate se ejecuta mediante el algoritmo de Louvain. La evaluación matemática de esta partición resulta en un coeficiente de modularidad excepcionalmente alto ($Q = 0.588$), un valor que supera de forma holgada el umbral teórico de significancia estructural ($Q > 0.3$). Este resultado valida empíricamente la hipótesis de fragmentación extrema de la red, confirmando de manera cuantitativa la formación de "cámaras de eco" absolutas: agrupaciones estancas de usuarios altamente cohesionadas en su interior, pero con una permeabilidad topológica casi nula hacia las comunidades adyacentes.
 
-
-
-## Walktrap
+Este bloque realiza el recuento empírico del volumen de nodos asignados a cada clúster de Louvain, ordenándolos en un ranking decreciente y computando sus porcentajes relativos y acumulados. El código genera una visualización lineal discontinua orientada a aplicar el criterio metodológico del "codo", permitiendo identificar con rigor científico el punto de inflexión exacto a partir del cual el tamaño de los clústeres decae significativamente, aislando las macro-comunidades estables de la periferia estocástica de la red.
 ```{r}
-walktrap <- cluster_walktrap(grafo_limpio)
-V(grafo_limpio)$community <- as.character(walktrap$membership)
-p2 <- plot_comunidades(grafo_limpio, walktrap, "Algoritmo Walktrap")
+dist_louvain <- df_nodos |> 
+  count(com_louvain, sort = TRUE) |> 
+  mutate(
+    algoritmo = "Louvain",
+    porcentaje = n / sum(n) * 100,
+    porcentaje_acumulado = cumsum(porcentaje),
+    ranking = row_number()
+  )
 
-m_walktrap <- modularity(cluster_walktrap(grafo_limpio))
-cat("Modularidad Walktrap:", m_walktrap, "\n")
+dist_walktrap <- df_nodos |> 
+  count(com_walktrap, sort = TRUE) |> 
+  mutate(
+    algoritmo = "Walktrap",
+    porcentaje = n / sum(n) * 100,
+    porcentaje_acumulado = cumsum(porcentaje),
+    ranking = row_number()
+  )
+
+distribucion_comunidades <- bind_rows(dist_louvain, dist_walktrap)
+
+ggplot(distribucion_comunidades, aes(x = ranking, y = n, color = algoritmo)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 4, linetype = "dashed", color = "steelblue", size = 0.8) +
+  geom_vline(xintercept = 5, linetype = "dashed", color = "darkorange", size = 0.8) +
+  scale_color_manual(values = c("Louvain" = "steelblue", "Walktrap" = "darkorange")) +
+  theme_minimal() +
+  labs(
+    title = "Criterio del Codo para la Selección de Macro-comunidades",
+    subtitle = "Comparativa de tamaño: Louvain vs Walktrap",
+    x = "Ranking de Comunidades (Ordenadas por Tamaño)",
+    y = "Número de Nodos (Usuarios)",
+    color = "Algoritmo"
+  )
 ```
-La segmentación complementaria mediante el algoritmo Walktrap, resulta en un coeficiente de modularidad de 0.573. Esta métrica confirma la robustez topológica de los hallazgos anteriores al presentar una desviación mínima respecto al óptimo alcanzado por la heurística de Louvain. 
 
-Desde una perspectiva analítica, la convergencia de dos modelos matemáticos con fundamentos metodológicos distintos hacia un nivel de segregación tan elevado ratifica que la estructura de cámaras de eco es una propiedad intrínseca y estructural del conjunto de datos, descartando definitivamente que la alta polarización detectada sea un error del diseño algorítmico.
-
+Este bloque consolida el análisis de clustering inyectando los vectores de pertenencia en los atributos estáticos del grafo. El script gestiona el colapso de la varianza mediante la función fct_lump_n para controlar el rango de categorías visibles. Posteriormente, evalúa por consola los índices globales exactos de modularidad de ambas particiones y genera la llamada cruzada a la función gráfica, dibujando los dos mapeos espaciales del mapa de discusión de Reddit.
 
 ```{r}
-#| warning: false
-# Combinamos ambos en una sola imagen (1 fila, 2 columnas)
-p_comparativo <- p1 + p2 + plot_layout(guides = 'collect') & theme(legend.position = "bottom",
-        legend.box = "horizontal")
+grafo_limpio <- grafo_limpio |>
+  activate(nodes) |>
+  mutate(
+    community_louvain = fct_lump_n(as.factor(com_louvain), n =  7, other_level = "Periferia"),
+    community_walktrap = fct_lump_n(as.factor(com_walktrap), n = 7, other_level = "Periferia")
+  ) 
 
-p_comparativo
+plot_louvain <- plot_comunidades(graph = grafo_limpio, 
+                 comunidad_col = "community_louvain", 
+                 titulo = "Comunidades (Louvain)")
+plot_walktrap <- plot_comunidades(graph = grafo_limpio, 
+                       comunidad_col = "community_walktrap", 
+                       titulo = "Comunidades (Walktrap)")
+print(plot_louvain)
+ggsave("images/sna_louvain.png", plot = plot_louvain,  dpi = 300)
+
+print(plot_walktrap)
+ggsave("images/sna_walktrap.png", plot = plot_walktrap,  dpi = 300)
+
 ```
-La visualización simultánea de los modelos de Louvain y Walktrap permite validar empíricamente la estabilidad topológica de las comunidades detectadas. Al mantener idéntica la disposición espacial de los nodos, se evidencia una alta congruencia en la asignación estructural entre ambas metodologías, confirmando que las fronteras entre los grupos son nítidas y consistentes.
 
-Mientras que Louvain optimiza la modularidad ($Q = 0.588$) consolidando la red en 6 macro-comunidades, Walktrap detecta una topología ligeramente más granular (8 clústeres, $Q = 0.573$) al fundamentarse en la retención de caminos aleatorios. A pesar de esta diferencia en la resolución, la convergencia de ambos coeficientes hacia una segregación extrema demuestra que la polarización en cámaras de eco es una propiedad intrínseca de los datos. Esta validación cruzada descarta definitivamente que la fragmentación observada sea un artefacto matemático provocado por el diseño de un algoritmo específico, consolidando la robustez del análisis espacial.
-
-
-Tras la evaluación de ambos algoritmos, se selecciona la partición generada por el algoritmo de **Louvain** como base para posteriores análisis . 
-Esta elección se fundamenta en un doble criterio técnico. En primer lugar, la optimización estricta de la modularidad: Louvain maximiza la función objetivo ($Q = 0.588$), ofreciendo la segmentación más pura y matemáticamente aislada del grafo. En segundo lugar, el principio de parsimonia estructural: al consolidar la red en 6 macro-comunidades, Louvain reduce la fragmentación granular, mitigando el riesgo de solapamiento semántico y ruido estadístico en las fases posteriores de modelado de temas y extracción de diccionarios característicos.
 
 
 ### Métricas
 
-#### Asortatividad
-El cálculo de los coeficientes de asortatividad proporciona la confirmación matemática definitiva sobre la dinámica de segregación de la red.
-```{r}
-# Asortatividad de grado: 
-# > 0: Red asortativa (ricos con ricos). 
-# < 0: Red disasortativa (hubs conectados a nodos pequeños).
-V(grafo_limpio)$community <- as.character(louvain$membership)
-asort_grado <- assortativity_degree(grafo_limpio, directed = TRUE)
+#### Transitividad
 
-# Asortatividad por comunidad (¿se mezclan los grupos?):
-asort_comun <- assortativity_nominal(grafo_limpio, as.integer(as.factor(V(grafo_limpio)$community)))
+Este bloque ejecuta el cálculo de transitividad macroscópica sobre la topología limpia. El coeficiente evalúa la probabilidad empírica de que dos nodos adyacentes a un nodo central compartan una arista entre sí, determinando el nivel de encriptamiento o conectividad interna del grafo.
+```{r}
+# Medición del nivel de encriptamiento de las comunidades
+transitividad_global <- transitivity(grafo_limpio, type = "global")
+
+cat("Índice de Transitividad Global:", round(transitividad_global, 4), "\n")
+```
+
+#### Asortatividad
+La asortatividad nominal calculada sobre las particiones de Louvain arroja un coeficiente positivo, lo que demuestra empíricamente la existencia de homofilia estructural en el debate. Los usuarios muestran una preferencia matemática por interactuar exclusivamente con miembros de su propia comunidad, confirmando la consolidación de "cámaras de eco" cerradas. Este alto grado de segregación ideológica justifica el análisis semántico posterior mediante modelos de lenguaje (LLM) para auditar el tono de dicha polarización.
+
+```{r}
+asort_grado <- grafo_limpio |> 
+  with_graph(graph_assortativity(degree, directed = TRUE))
+
+# Asortatividad ideológica por comunidad de Louvain
+asort_comun <- grafo_limpio |> 
+  with_graph(graph_assortativity(com_louvain))
 
 cat("Asortatividad de Grado:", round(asort_grado, 4), "\n")
 cat("Asortatividad de Comunidad:", round(asort_comun, 4), "\n")
 ```
-En primer lugar, la **asortatividad de grado (0.534)** presenta un valor positivo significativo. Esto constata un patrón topológico de "club de ricos" (*rich-club effect*): los nodos con un alto volumen de conexiones (*hubs* y autoridades) tienden a interactuar preferentemente con otros nodos igualmente influyentes. En la práctica, esto significa que el núcleo del debate está monopolizado por la élite del foro, que discute entre sí marginando a la periferia.
 
-En segundo lugar, la **asortatividad nominal por comunidad (0.865)** arroja un valor excepcionalmente alto, rozando el máximo teórico absoluto de 1. Esta métrica cuantifica la homofilia extrema del grafo, demostrando que las interacciones se producen casi de manera exclusiva entre usuarios del mismo clúster de Louvain. Es la prueba analítica concluyente de que el modelo ha detectado cámaras de eco herméticas, donde el cruce de información entre diferentes trincheras ideológicas está estructuralmente bloqueado.
+## Identificación de Roles en la Red
 
-
-
-# Identificación de Roles Estructurales
-
+Este bloque opera sobre la estructura relacional abstrayendo las centralidades a un plano de lógica condicional jerárquica mediante la directiva case_when. El script clasifica taxonómicamente a la población de la red basándose en umbrales de distribución: aislando a los Brokers o conectores (alta intermediación pero baja popularidad pasiva), Autoridades o centros de referencia (dominio del PageRank), y Hubs o difusores (alto grado de salida / out_degree), segmentándolos del usuario regular de la plataforma.
 ```{r}
-# Creamos el ranking comparativo
-ranking_centralidad <- data.frame(
-  Usuario = V(grafo_limpio)$name,
-  Grado = V(grafo_limpio)$degree,
-  Intermediacion = round(V(grafo_limpio)$betweenness, 2),
-  Cercania = round(V(grafo_limpio)$closeness, 5),
-  PageRank = round(V(grafo_limpio)$pagerank, 4)
-) |>
-  arrange(desc(Intermediacion)) |> # Ordenamos por la que suele ser más crítica
-  head(10)
+# 2.  (Usando tidygraph)
+tabla_roles <- grafo_limpio |>
+  activate(nodes) |>
+  mutate(
+    in_degree = centrality_degree(mode = "in"),
+    out_degree = centrality_degree(mode = "out")
+  ) |>
+  as_tibble() |>
+  mutate(
+    Rol = case_when(
+      betweenness > quantile(betweenness, 0.90) & in_degree < quantile(in_degree, 0.75) ~ "Broker (Conector)",
+      pagerank > quantile(pagerank, 0.90) ~ "Autoridad (Referencia)",
+      out_degree > quantile(out_degree, 0.90) ~ "Hub (Difusor activo)",
+      TRUE ~ "Usuario Regular"
+    )
+  ) |>
+  mutate(comunidad = community_louvain)
+print(tabla_roles)
 
-# Renderizado para Quarto/RMarkdown
-knitr::kable(ranking_centralidad, 
-             caption = "Comparativa de las 4 métricas de centralidad para los nodos principales")
+saveRDS(tabla_roles, "data/tabla_roles.rds")
+
 ```
-El cruce de métricas topológicas revela la jerarquía funcional de la red al priorizar la capacidad de intermediación (*Betweenness*):
 
-* **El *Broker* Principal:** El usuario `VincentNacon` monopoliza los puentes informacionales (Intermediación = 11.399). Aunque no posee el grado máximo, controla el flujo cruzado entre clústeres.
-* ***Hub* vs. *Broker*:** `Dreaming_Blackbirds` registra la máxima actividad absoluta (Grado = 151), pero su menor intermediación lo define como un difusor masivo local confinado a su propia cámara de eco.
-* **Vulnerabilidad Estructural:** Se observa una caída drástica de la intermediación tras los primeros puestos. La escasa cohesión global depende de un cuello de botella formado por muy pocos usuarios; su eliminación fracturaría la red en islas totalmente aisladas.
+
+Este bloque genera el gráfico de dispersión orientado a diagnosticar la morfología de la influencia. Cruza en los ejes cartesianos el Grado (Popularidad) frente a la Intermediación (Control sobre el flujo informativo) de las cuentas previamente catalogadas como élite estructural, mapeando de forma redundante el PageRank de los nodos en la escala geométrica del marcador.
+```{r}
+
+# Ahora puedes visualizar quiénes están realmente moviendo el debate
+mapa_roles<- ggplot(tabla_roles |> filter(Rol != "Usuario Regular"), 
+       aes(x = degree, y = betweenness, color = Rol)) +
+  geom_point(aes(size = pagerank), alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Mapa de Roles Estratégicos en la Red",
+       x = "Popularidad (Grado)", y = "Capacidad de Control (Intermediación)")
+
+print(mapa_roles)
+
+ggsave("images/sna_mapa_roles.png", plot = mapa_roles,  dpi = 300)
+
+```
+
+
+## Red egocéntrica
+Este bloque identifica de forma automatizada al nodo líder en métricas de intermediación de la red (Top Broker). Utiliza la función nativa make_ego_graph fijando un radio vecinal controlado de primer orden ($K=1$) para extraer su vecindario directo. El subgrafo se transforma al ecosistema tidygraph etiquetando la variable dual Ego-Alter y se proyecta mediante un layout espacial en estrella (layout = 'star'), forzando de manera explícita la centralidad del ego para evaluar la dependencia estructural de su burbuja relacional.
+```{r}
+# 1. Identificamos automáticamente al usuario más influyente (Top Broker)
+top_broker <- tabla_roles |> 
+  filter(Rol == "Broker (Conector)") |> 
+  arrange(desc(betweenness)) |> 
+  slice(1) |> 
+  pull(name)
+
+metricas_top <- tabla_roles |> filter(name == top_broker)
+cat("Generando Red Egocéntrica para el Broker principal:", top_broker, "\n")
+cat("El nodo top tiene un grado de", metricas_top$degree, "y una intermediación de", metricas_top$betweenness, "\n")
+
+# Extraemos su burbuja personal aislando topológicamente el vecindario
+ego_red <- grafo_limpio |>
+  convert(to_local_neighborhood, 
+          node = which(.N()$name == top_broker), 
+          order = 1) |>
+  # Etiquetado en la sub-red
+  activate(nodes) |>
+  mutate(es_ego = ifelse(name == top_broker, "EGO (Top Broker)", "Contacto (Alter)"))
+
+# Visualización pura con ggraph
+plot_ego_red <- ggraph(ego_red, layout = "star", center = which(.N()$name == top_broker)) +
+  geom_edge_link(alpha = 0.4, color = "grey50") +
+  geom_node_point(aes(color = es_ego, size = es_ego)) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+  scale_size_manual(values = c("EGO (Top Broker)" = 8, "Contacto (Alter)" = 3)) +
+  scale_color_manual(values = c("EGO (Top Broker)" = "red", "Contacto (Alter)" = "steelblue")) +
+  theme_graph() +
+  labs(title = paste("Red Egocéntrica del Top Broker:", top_broker),
+       subtitle = "Análisis de la influencia directa en el flujo de información") +
+  theme(legend.position = "bottom")
+print(plot_ego_red)
+
+ggsave("images/sna_ego_red.png", plot = plot_ego_red,  dpi = 300)
+
+```
 
 
 ### Correlación entre popularidad y control de información
 
-```{r}
-# Dataframe para análisis estadístico
-df_analisis <- data.frame(
-  Nombre = V(grafo_limpio)$name,
-  Popularidad = V(grafo_limpio)$degree,
-  Control = V(grafo_limpio)$betweenness,
-  Alcanzabilidad = V(grafo_limpio)$closeness,
-  Prestigio = V(grafo_limpio)$pagerank
-)
 
-# Gráfico de dispersión para detectar anomalías estructurales
-ggplot(df_analisis, aes(x = Popularidad, y = Control)) +
-  geom_point(aes(size = Prestigio, color = Alcanzabilidad), alpha = 0.6) +
+Este bloque genera el gráfico de dispersión global enfocado a evaluar la tasa de acoplamiento entre la centralidad de Grado (eje X) y la centralidad de Intermediación (eje Y) sobre la población total analizada. Ajusta de forma automática un modelo matemático por regresión lineal por mínimos cuadrados (method = 'lm') con intervalos de confianza sombreados, permitiendo diagnosticar de manera empírica si el control informativo es un subproducto directo del volumen bruto de interacciones o si existen dinámicas de control asimétricas independientes de la popularidad.
+```{r}
+# 3. Visualización de Dispersión (Popularidad vs Control)
+plot_correlacion_popularidad_control <- ggplot(tabla_roles, aes(x = degree, y = betweenness)) +
+  geom_point(aes(size = pagerank, color = closeness), alpha = 0.6) +
   geom_smooth(method = "lm", color = "red", linetype = "dashed") +
   scale_color_viridis_c() +
   theme_minimal() +
   labs(title = "Correlación Popularidad vs. Control de Información",
        x = "Grado (Popularidad)",
        y = "Intermediación (Control)")
+
+print(plot_correlacion_popularidad_control)
+
+ggsave("images/plot_correlacion_popularidad_control.png", plot = plot_correlacion_popularidad_control,  dpi = 300)
+
+
 ```
-El análisis de dispersión entre el Grado y la Intermediación permite identificar desviaciones estratégicas respecto al comportamiento esperado de la red. Aunque existe una tendencia lineal positiva (marcada por la línea de regresión roja), el gráfico revela "anomalías estructurales" críticas: nodos que poseen un control de información desproporcionadamente alto para su nivel de actividad. Estos usuarios, situados significativamente por encima de la media, actúan como cuellos de botella estratégicos que conectan subcomunidades aisladas. Por el contrario, los nodos situados en el extremo derecho inferior representan usuarios muy activos pero con escasa relevancia estructural, limitados a interactuar masivamente dentro de su propia cámara de eco sin capacidad de influir en el flujo global de la red.
 
 
-### Identificación de actores clave por rol funcional
-```{r}
-top_grado     <- df_analisis |> arrange(desc(Popularidad)) |> head(3) |> pull(Nombre)
-top_intermed  <- df_analisis |> arrange(desc(Control)) |> head(3) |> pull(Nombre)
-top_pagerank  <- df_analisis |> arrange(desc(Prestigio)) |> head(3) |> pull(Nombre)
-
-# Esto te da nombres concretos para comentar en el texto
-cat("Líderes de opinión (PageRank):", paste(top_pagerank, collapse = ", "), "\n")
-cat("Conectores de la red (Intermediación):", paste(top_intermed, collapse = ", "), "\n")
-```
-La extracción de los perfiles dominantes permite asignar roles sociométricos precisos a los usuarios con mayor impacto estructural. Los **líderes de opinión** (`MadScientistRat`, `Lofteed`, `VincentNacon`), identificados mediante PageRank, poseen un alto prestigio derivado no solo de su actividad, sino de su conexión con otros usuarios influyentes. Por otro lado, los **conectores de la red** (`VincentNacon`, `Varorson`, `betweentwoblueclouds`) destacan por su elevada intermediación, actuando como los puentes necesarios para que la información fluya entre los diferentes clústeres. Cabe destacar el papel de `VincentNacon`, quien aparece en ambas categorías, consolidándose como la figura más versátil y estratégica del ecosistema al combinar autoridad intelectual con control sobre el tráfico de mensajes.
-
-
-## Identificación de Roles en la Red
-
-En lugar de ver únicamente los usuarios con más interacciones, clasificamos su rol dentro de la comunidad basándonos en distintas métricas de centralidad.
+Este bloque opera como el puente metodológico definitivo uniendo el análisis estructural con la fase de minería de textos. El código aísla las cuentas catalogadas como "élite estructural" (hubs, autoridades y brokers) y realiza una operación de filtrado relacional mediante un emparejamiento interno (inner_join) sobre el dataset de texto original de Reddit. Finalmente, ejecuta una limpieza algorítmica de expresiones regulares (stringr), purgando enlaces URL, entidades de código de escape HTML y normalizando los espacios en blanco (str_squish) para empaquetar un archivo serializado .rds optimizado para los modelos masivos de lenguaje (LLM).
 
 ```{r}
-# Calculamos el grado de entrada y salida por separado para mayor detalle
-V(grafo_limpio)$out_degree <- degree(grafo_limpio, mode = "out")
-V(grafo_limpio)$in_degree <- degree(grafo_limpio, mode = "in")
+usuarios_elite <- tabla_roles |>
+  filter(Rol != "Usuario Regular") |>
+  select(author_name = name, Rol, betweenness, pagerank)
 
-tabla_roles <- data.frame(
-  Usuario = V(grafo_limpio)$name,
-  # Calculamos las métricas directamente con las funciones de igraph
-  Grado_Entrada = degree(grafo_limpio, mode = "in"),
-  Grado_Salida = degree(grafo_limpio, mode = "out"),
-  Intermediacion = round(betweenness(grafo_limpio, directed = TRUE), 2),
-  # PageRank devuelve una lista, necesitamos extraer el $vector
-  PageRank = round(page_rank(grafo_limpio)$vector, 5),
-  # Usamos el nombre del atributo que corregimos en el paso anterior
-  Comunidad = V(grafo_limpio)$community
-) |>
+textos_elite <- data_texto |>
+  inner_join(usuarios_elite, by = "author_name")
+
+textos_limpios <- textos_elite |>
   mutate(
-    Rol = case_when(
-      Intermediacion > quantile(Intermediacion, 0.90) & Grado_Entrada < quantile(Grado_Entrada, 0.75) ~ "Broker (Conector)",
-      PageRank > quantile(PageRank, 0.90) ~ "Autoridad (Referencia)",
-      Grado_Salida > quantile(Grado_Salida, 0.90) ~ "Hub (Difusor activo)",
-      TRUE ~ "Usuario Regular"
-    )
-  )
+    texto_procesado = self_text,
+    texto_procesado = str_remove_all(texto_procesado, "http[s]?://\\S+"),
+    texto_procesado = str_remove_all(texto_procesado, "&[a-z]+;"),
+    texto_procesado = str_squish(texto_procesado)
+  ) |>
+  filter(texto_procesado != "" & !is.na(texto_procesado))
 
-# Veamos cuántos usuarios hay de cada rol
-table(tabla_roles$Rol)
-
-# Mostramos los principales Brokers, Autoridades y Hubs
-knitr::kable(
-  tabla_roles |> filter(Rol %in% c("Broker (Conector)", "Autoridad (Referencia)", "Hub (Difusor activo)")) |> arrange(desc(PageRank)) |> head(15), 
-  caption = "Usuarios Destacados por su Rol en la Red"
-)
-
-saveRDS(tabla_roles, "data/tabla_roles.rds") # guardamos para las cámaras de eco
-
-tabla_roles|>select(-c("Usuario")) |> filter(Rol %in% c("Broker (Conector)", "Autoridad (Referencia)", "Hub (Difusor activo)")) |> arrange(desc(PageRank)) |> head(15)
-
+saveRDS(textos_limpios, "data/textos_elite_gatekeepers.rds")
+cat("¡Embudo completado! Te han quedado", nrow(textos_limpios), "comentarios clave escritos por la élite de la red.\n")
 ```
-Este análisis trasciende el volumen bruto de mensajes para categorizar a los usuarios según su función sociométrica mediante el uso de percentiles estadísticos. El algoritmo clasifica a los actores en tres roles críticos: "Autoridades", definidos por su prestigio y capacidad de referencia según PageRank; "Brokers", actores con alta intermediación que operan como puentes estratégicos entre comunidades aisladas; y "Hubs", perfiles con una alta tasa de emisión de contenido. Esta taxonomía permite perfilar la arquitectura jerárquica de la red, diferenciando con precisión a los líderes de opinión de los meros difusores activos de información.
-
-
-
 

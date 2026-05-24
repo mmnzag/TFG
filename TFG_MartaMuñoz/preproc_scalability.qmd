@@ -37,6 +37,8 @@ head(dataset_bruto)
 set.seed(123) # Garantiza que siempre extraigas los mismos 50.000 comentarios
 datos <- dataset_bruto |> 
   slice_sample(n = 50000)
+
+saveRDS(datos, "data/data_sample.rds")
 ```
 
 
@@ -61,8 +63,8 @@ edges_co_participacion <- participaciones |>
   # Renombramos para que tidygraph y tu script de redes lo entiendan
   select(from = author_name.x, to = author_name.y)
 
-datos_sna <- edges_co_participacion |>
-  count(from, to, name = "weight")
+# datos_sna <- edges_co_participacion |>
+#   count(from, to, name = "weight")
 
 
 saveRDS(datos_sna, "data/data_sna.rds")

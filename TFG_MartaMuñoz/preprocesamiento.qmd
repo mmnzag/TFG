@@ -19,8 +19,6 @@ Carga de librerías especializadas en minería de datos de Reddit (`RedditExtrac
 ```{r}
 library(RedditExtractoR)
 library(tidyverse) 
-library(igraph) # sna y visualizacion
-library(ggraph) # visualizacion
 library(tm) # text mining 
 library(textstem) # Para lematización
 ```

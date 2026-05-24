@@ -10,6 +10,9 @@ format:
     code-fold: show
     theme: cosmo
     highlight-style: dracula
+execute:
+  warning: false
+  message: false
 ---
 
 # Carga y preprocesamiento
@@ -27,15 +30,18 @@ library(igraph)
 library(LDAvis)
 library(servr)
 library(patchwork) 
+library(future)
+library(furrr)
 
 # Carga de librerías necesarias para llamadas a API
 library(httr2)
 library(jsonlite)
 
+plan(multisession, workers = 3)
+
 dtm_lda <- readRDS("data/dtm_lda.rds") 
 data_texto <- readRDS("data/data_texto_procesado.rds")
 
-mi_api_key <- keyring::key_get(service = "groq", username = "mi_cuenta_api")
 ```
 
 # Preprocesamiento y filtrado TF-IDF
@@ -46,10 +52,14 @@ En esta fase, preparamos el texto bruto para el algoritmo LDA. No basta con elim
 - Construcción DTM: Reconstruimos la Matriz Documento-Término (dtm_lda_limpio), garantizando que no queden comentarios vacíos tras la limpieza profunda.
 
 ```{r}
+stopwords_dominio <- tibble(
+  word = c("crypto", "bitcoin", "money", "people") # Añade las que veas necesarias
+)
 # Tokenización y limpieza básica
 text_tokens <- data_texto |>
   unnest_tokens(word, comment) |>
   anti_join(stop_words, by = "word") |>
+  anti_join(stopwords_dominio, by = "word") |>
   filter(nchar(word) > 2) |>
   mutate(word = textstem::lemmatize_words(word))
 
@@ -100,76 +110,160 @@ resultados_tuning
 # Generamos el gráfico para decidir visualmente
 FindTopicsNumber_plot(resultados_tuning)
 ```
-Al observar el gráfico resultante, identificamos un punto de inflexión claro en k = 8. En este valor, la métrica de CaoJuan2009 alcanza un mínimo local (indicando baja similitud/solapamiento entre temas), mientras que Griffiths2004 se estabiliza en su zona de máximo rendimiento. Procederemos a instanciar el modelo final con 8 tópicos.
+
 
 
 # Entrenamiento del modelo LDA y extracción de términos
-Una vez depurada la matriz, procedemos a entrenar el modelo probabilístico LDA configurado para descubrir 6 tópicos ($k=8$), garantizando la reproducibilidad matemática mediante una semilla fija.
+Una vez depurada la matriz, procedemos a entrenar el modelo probabilístico LDA configurado para descubrir k tópicos ($k=8$), garantizando la reproducibilidad matemática mediante una semilla fija.
 ```{r}
-modelo_lda <- LDA(dtm_lda_limpio, k = 8, control = list(seed = 123))
+# ==============================================================================
+# 1. HILO ASÍNCRONO: Entrenamiento del LDA Clásico
+# ==============================================================================
+cat("Lanzando entrenamiento del modelo LDA en segundo plano...\n")
 
-# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
-terminos_top <- terms(modelo_lda, 8)
+hilo_lda <- future::future({
+  # Esto se ejecutará de forma invisible sin bloquear la consola
+  modelo <- LDA(dtm_lda_limpio, k = 8, control = list(seed = 123))
+  saveRDS(modelo, "data/modelo_lda.rds")
+  
+  terminos_top <- terms(modelo, 8)
+  todos_los_temas_texto <- paste(
+    sapply(1:ncol(terminos_top), function(i) {
+      paste0("Topic ", i, ": ", paste(terminos_top[, i], collapse = ", "))
+    }), 
+    collapse = "\n"
+  )
+  
+  # 1.3 Prompt para nombrar temas
+  prompt_unico <- paste(
+    "You are an expert data analyst specializing in Reddit financial discussions.",
+    "Below are 8 groups of keywords extracted from a dataset via LDA topic modeling.",
+    "Your task is to assign a single, concise name (maximum 4 words) in ENGLISH to each topic.",
+    "CRITICAL RULE: Each name must be completely UNIQUE and accurately distinguish one topic from another.",
+    "Respond ONLY with a flat numbered list from 1 to 8. Do not include introductory text, explanations, or conclusions.",
+    "Topics:",
+    todos_los_temas_texto,
+    sep = "\n"
+  )
+  
+  # 1.4 Petición a Ollama
+  respuesta_batch <- request("http://localhost:11434/v1/chat/completions") |>
+    req_body_json(list(
+      model = "llama3.1", 
+      messages = list(list(role = "user", content = prompt_unico)),
+      options = list(temperature = 0.0)
+    )) |>
+    req_perform()
+  
+  # 1.5 Limpieza de la respuesta
+  resultado_texto <- resp_body_json(respuesta_batch)$choices[[1]]$message$content
+  nombres_ia <- str_split(resultado_texto, "\n")[[1]] |> 
+    str_remove("^[0-9].\\s*") |> 
+    trimws() |> 
+    keep(~ .x != "")
+  
+  nombres_temas <- setNames(nombres_ia, as.character(1:8))
+  saveRDS(nombres_temas, "data/nombres_temas.rds")
+  
+  # Devolvemos una lista con el modelo y los nombres
+  list(modelo = modelo, nombres = nombres_temas)
+}, seed = TRUE)
 
-print(terminos_top)
-```
-Tras la ejecución, extraemos los 8 términos con mayor probabilidad dentro de cada tema (distribución $\beta$) para realizar una primera inspección semántica. Observamos una rápida agrupación de conceptos, aunque detectamos la persistencia de términos estructurales del dominio ("crypto", "bitcoin", "money") que aparecen transversalmente en la mayoría de los grupos.
+# ==============================================================================
+# 2. HILOS PARALELOS (MAP): Extracción de micro-temas con Ollama
+# ==============================================================================
+cat("Iniciando Fase MAP (IA) de forma simultánea...\n")
 
-## Refinamiento del modelo: eliminación de stopwords de dominio
+tamano_lote <- 150
+lotes_datos <- data_texto |> 
+  mutate(chunk_id = ceiling(row_number() / tamano_lote)) |> 
+  group_split(chunk_id)
 
-En la primera iteración del modelo, observamos que términos nucleares como crypto, bitcoin y money monopolizaban la distribución probabilística ($\beta$) de casi todos los clústeres. Al ser conceptos ubicuos en esta comunidad, actúan como "ruido de dominio", eclipsando la verdadera estructura temática.
-Para solucionar esto, creamos un diccionario personalizado de stopwords para excluirlas del proceso de tokenización. Tras recalcular el TF-IDF y la Matriz Documento-Término, reentrenamos el modelo LDA con $k=8$.
+extraer_micro_temas <- function(df_lote) {
+  texto_unido <- paste(paste("-", df_lote$comment), collapse = "\n")
+  
+  prompt_map <- paste(
+    "You are an expert data analyst.",
+    "Extract a brief, comma-separated list of the 3 to 5 main topics discussed in these comments.",
+    "Respond ONLY with the list. Do not explain.",
+    "Comments:",
+    texto_unido,
+    sep = "\n"
+  )
+  
+  req <- request("http://localhost:11434/v1/chat/completions") |>
+    req_body_json(list(
+      model = "llama3",
+      messages = list(list(role = "user", content = prompt_map)),
+      options = list(temperature = 0.0, num_predict = 50)
+    )) |>
+    req_error(is_error = function(resp) FALSE)
+  
+  resp <- req_perform(req)
+  
+  if (resp_status(resp) == 200) {
+    return(stringr::str_trim(resp_body_json(resp)$choices[[1]]$message$content))
+  } else {
+    return("API_ERROR")
+  }
+}
 
-```{r}
-# 1. Definimos las stopwords específicas de tu dominio
-# Añade o quita palabras de esta lista según lo que vayas viendo
-stopwords_dominio <- tibble(
-  word = c("crypto", "bitcoin", "money")
+# Esto usará los 2 hilos restantes mientras el primero sigue haciendo el LDA
+micro_temas_lista <- future_map_chr(
+  lotes_datos, 
+  extraer_micro_temas, 
+  .options = furrr_options(seed = TRUE),
+  .progress = TRUE 
 )
 
-# 2. Tokenización y limpieza (con el filtro extra)
-text_tokens <- data_texto |>
-  unnest_tokens(word, comment) |>
-  # Filtro 1: Stopwords estándar del inglés (the, and, in...)
-  anti_join(stop_words, by = "word") |>
-  # Filtro 2: NUESTRAS stopwords del dominio
-  anti_join(stopwords_dominio, by = "word") |>
-  # Filtro 3: Palabras muy cortas
-  filter(nchar(word) > 2) |>
-  # Lematización (convertir plurales a singulares, etc.)
-  mutate(word = textstem::lemmatize_words(word))
+micro_temas_limpios <- micro_temas_lista[micro_temas_lista != "API_ERROR"]
 
-# 3. Calcular TF-IDF para filtrar ruido matemáticamente
-text_tfidf <- text_tokens |>
-  count(comment_id, word) |>
-  bind_tf_idf(word, comment_id, n) |>
-  filter(tf_idf > 0.01) # Mantenemos este filtro que ya tenías
+# ==============================================================================
+# 3. FASE REDUCE: Síntesis final de Ollama
+# ==============================================================================
+cat("\nIniciando Fase REDUCE: Sintetizando los macro-temas definitivos...\n")
 
-# 4. Reconstruir la matriz DTM
-dtm_lda_limpio <- text_tfidf |>
-  cast_dtm(comment_id, word, n)
+todos_los_micro_temas <- paste(paste("-", micro_temas_limpios), collapse = "\n")
 
-# 5. Eliminar documentos vacíos
-row_totals <- apply(dtm_lda_limpio, 1, sum)
-dtm_lda_limpio <- dtm_lda_limpio[row_totals > 0, ]
+prompt_reduce <- paste(
+  "You are a Lead Data Scientist.",
+  "CONSOLIDATE the following list into the TOP 8 MACRO-TOPICS of the entire dataset.",
+  "MANDATORY OUTPUT FORMAT (A clean bulleted list):",
+  "- **[TOPIC NAME IN ENGLISH]**: [A concise 1 or 2 line description in English].",
+  "Raw sub-topics:",
+  todos_los_micro_temas,
+  sep = "\n"
+)
+
+req_reduce <- request("http://localhost:11434/v1/chat/completions") |>
+  req_body_json(list(
+    model = "llama3",
+    messages = list(list(role = "user", content = prompt_reduce)),
+    options = list(temperature = 0.1) 
+  )) |>
+  req_perform()
+
+resultado_macro_temas <- resp_body_json(req_reduce)$choices[[1]]$message$content
+
+# ==============================================================================
+# 4. SINCRONIZACIÓN FINAL
+# ==============================================================================
+cat("\nEsperando a que el algoritmo LDA termine sus iteraciones...\n")
+
+# future::value() bloquea el script solo si el LDA aún no ha terminado.
+# Si ya terminó mientras Ollama hacía lo suyo, te lo devuelve instantáneamente.
+modelo_lda <- future::value(hilo_lda)
+terminos_top_lda <- terms(modelo_lda, 8)
+
+cat("\n✅ ¡Ejecución híbrida completada!\n\n")
+cat("--- 8 TÉRMINOS TOP DEL LDA CLÁSICO ---\n")
+print(terminos_top_lda)
+cat("\n--- 8 MACRO-TEMAS DEL MAP-REDUCE (OLLAMA) ---\n\n")
+cat(resultado_macro_temas)
 ```
 
 
 
-Se repite modelo
-```{r}
-modelo_lda <- LDA(dtm_lda_limpio, k = 8, control = list(seed = 123))
-
-# Extraemos las 8 palabras más representativas de cada uno de los 4 temas
-terminos_top <- terms(modelo_lda, 8)
-
-print(terminos_top)
-```
-El resultado muestra una mejora espectacular en la granularidad de los temas, revelando narrativas subyacentes mucho más precisas como las estafas tipo rug pull, el debate sobre el sistema fiduciario gubernamental, o el concepto de reserva de valor (store of value).
-
-```{r}
-saveRDS(modelo_lda, "data/modelo_lda.rds")
-```
 
 # Etiquetado eutomático de tópicos mediante IA generativa (LLMs)
 Para eliminar el sesgo subjetivo en el nombramiento de los temas, automatizamos el etiquetado integrando un Modelo de Lenguaje Grande (LLM). En lugar de inferir manualmente el significado de la matriz $\beta$, construimos un pipeline que:
@@ -192,32 +286,27 @@ todos_los_temas_texto <- paste(
 )
 
 prompt_unico <- paste(
-  "Eres un analista de datos experto en Reddit.",
-  "A continuación te presento 8 grupos de palabras clave obtenidas mediante LDA.",
-  "Tu tarea es asignar un nombre corto (máximo 4 palabras) en INGLÉS a cada tópico.",
-  "REGLA CRÍTICA: Cada nombre debe ser ÚNICO y diferenciar claramente un tema de otro, incluso si las palabras se solapan.",
-  "Responde únicamente con una lista numerada del 1 al 8, sin explicaciones.",
-  "Temas:",
-  todos_los_temas_texto
+  "You are an expert data analyst specializing in Reddit financial discussions.",
+  "Below are 8 groups of keywords extracted from a dataset via LDA topic modeling.",
+  "Your task is to assign a single, concise name (maximum 4 words) in ENGLISH to each topic.",
+  "CRITICAL RULE: Each name must be completely UNIQUE and accurately distinguish one topic from another.",
+  "Respond ONLY with a flat numbered list from 1 to 8. Do not include introductory text, explanations, or conclusions.",
+  "Topics:",
+  todos_los_temas_texto,
+  sep = "\n"
 )
-
-# 2. Llamada única a la API (usando Groq como ejemplo)
-respuesta_batch <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(
-    `Authorization` = paste("Bearer", mi_api_key)
-  ) |>
+cat("Connecting to local Ollama instance for topic labeling...\n")
+respuesta_batch <- request("http://localhost:11434/v1/chat/completions") |>
   req_body_json(list(
-    model = "llama-3.1-8b-instant",
+    model = "llama3.1", 
     messages = list(list(role = "user", content = prompt_unico)),
-    temperature = 0.2 # Temperatura baja para consistencia
+    options = list(temperature = 0.0) # Bajas revoluciones para evitar alucinaciones en Ollama
   )) |>
   req_perform()
 
-# 3. Procesar la respuesta
+# 4. Process and clean local LLM response
 resultado_texto <- resp_body_json(respuesta_batch)$choices[[1]]$message$content
 
-# Limpiar el texto para extraer solo los nombres
-# (Esto asume que la IA responde "1. Nombre\n2. Nombre...")
 nombres_ia <- str_split(resultado_texto, "\n")[[1]] |> 
   str_remove("^[0-9].\\s*") |> 
   trimws() |> 
@@ -225,8 +314,7 @@ nombres_ia <- str_split(resultado_texto, "\n")[[1]] |>
 
 nombres_temas <- setNames(nombres_ia, as.character(1:8))
 colnames(terminos_top) <- nombres_temas
-# colnames(terms(modelo_lda, 8)) <- setNames(colnames(terms(modelo_lda, 8)), nombres_temas )
-setNames(colnames(terms(modelo_lda, 8)), nombres_temas )
+setNames(colnames(terms(modelo_lda, 8)), nombres_temas)
 print(nombres_temas)
 
 saveRDS(nombres_temas, "data/nombres_temas.rds")
@@ -372,51 +460,49 @@ Extraemos una muestra aleatoria de 100 comentarios (un volumen adecuado para la 
 ```{r}
 
 # 1. Preparamos la muestra
-set.seed(123) # Para que te salgan los mismos si lo repites
+# 1. Prepare dense sample
+set.seed(123) 
 muestra_descubrimiento <- data_texto |> 
   sample_n(125) |> 
   pull(comment)
 
 texto_unido <- paste(paste("-", muestra_descubrimiento), collapse = "\n")
 
-# 2. Prompt de Sistema (Reglas de hierro y One-Shot Prompting)
+# 2. System and User prompt structure forced into English
 prompt_sistema <- paste(
-  "Eres un analista de datos experto en sociología de foros financieros.",
-  "Tu única tarea es hacer un Topic Modeling cualitativo de los comentarios que te pase el usuario.",
+  "You are an expert data analyst specializing in financial forum sociology.",
+  "Your sole task is to perform qualitative Topic Modeling on the raw comments provided by the user.",
   "",
-  "FORMATO ESTRICTO OBLIGATORIO (Una lista de viñetas):",
-  "- **[TITLE IN ENGLISH]**: [Descripción en español de 1 o 2 líneas].",
+  "MANDATORY OUTPUT FORMAT (A clean bulleted list):",
+  "- **[TOPIC NAME IN ENGLISH]**: [A concise 1 or 2 line description in English explaining the core content and user sentiment].",
   "",
-  "EJEMPLO PERFECTO DE SALIDA:",
-  "- **Market Volatility**: Los usuarios expresan pánico ante las caídas abruptas de precios.",
-  "- **Scam Alerts**: La comunidad advierte sobre nuevos esquemas fraudulentos.",
+  "PERFECT OUTPUT EXAMPLE:",
+  "- **Market Volatility**: Users express panic and anxiety regarding sudden crypto price drops.",
+  "- **Scam Alerts**: The community actively warns peers about fraudulent schemes.",
   "",
-  "REGLAS INQUEBRANTABLES:",
-  "1. El título DENTRO de los asteriscos (**) DEBE estar 100% en inglés.",
-  "2. La descripción DESPUÉS de los dos puntos (:) DEBE estar 100% en español.",
-  "3. Comienza directamente con la lista de viñetas. NO incluyas introducciones ni conclusiones.",
+  "UNBREAKABLE RULES:",
+  "1. The title inside the double asterisks (**) MUST be 100% in English.",
+  "2. The description following the colon (:) MUST be 100% in English.",
+  "3. Start directly with the bulleted list. Do NOT include greetings, intro, or outro text.",
   sep = "\n"
 )
 
-# 3. Petición a la API (Separando Sistema y Usuario)
-cat("Enviando muestra a la IA (Llama 70B) para descubrimiento de tópicos...\n")
-
-
-req_descubrimiento <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(`Authorization` = paste("Bearer", mi_api_key)) |>
+# 3. Request to Local Ollama endpoint
+cat("Streaming data to local LLM for qualitative topic discovery...\n")
+req_descubrimiento <- request("http://localhost:11434/v1/chat/completions") |>
   req_body_json(list(
-    model = "llama-3.3-70b-versatile",
+    model = "llama3.1",
     messages = list(
       list(role = "system", content = prompt_sistema),
-      list(role = "user", content = paste("Comentarios a analizar:\n", texto_unido))
+      list(role = "user", content = paste("Comments to analyze:\n", texto_unido))
     ),
-    temperature = 0.1 
+    options = list(temperature = 0.0) # Maximum determinism
   )) |>
   req_perform()
 
-# 4. Imprimir el resultado
+# 4. Print structured results
 resultado_ia <- resp_body_json(req_descubrimiento)$choices[[1]]$message$content
-cat("\n--- TÓPICOS DESCUBIERTOS POR LA IA ---\n\n")
+cat("\n--- TOPICS DISCOVERED BY LOCAL LLM ---\n\n")
 cat(resultado_ia)
 ```
 
@@ -425,19 +511,8 @@ Una vez que el LLM ha descubierto orgánicamente los temas principales, procedem
 
 ```{r}
 
-# 1. ACTUALIZA ESTO con los nombres que te haya devuelto la IA en el paso anterior
-# temas_ia_puro <- c(
-#   "1" = "Market Volatility",
-#   "2" = "Scam Alerts",
-#   "3" = "Bullish Sentiment",
-#   "4" = "Cryptocurrency Criticism",
-#   "5" = "Regulation and Security",
-#   "6" = "Investment Strategies",
-#   "7" = "Quantum Computing Threat",
-#   "8" = "Lack of Understanding"
-# )
-
-temas_ia_puro <- c("Crypto Scams",
+temas_ia_puro <- c(
+  "Crypto Scams",
   "Market Volatility",
   "Lack of Regulation",
   "Money Laundering",
@@ -449,58 +524,65 @@ temas_ia_puro <- c("Crypto Scams",
   "Security Concerns"
 )
 
-# 2. Reutilizamos el bucle de clasificación de antes (simplificado)
-# Para la memoria, 500 comentarios es una muestra estadísticamente aceptable
 set.seed(999)
 datos_analisis_ia <- data_texto |> 
   sample_n(500) |> 
   mutate(tema_ia = NA_character_)
 
 prompt_sistema <- paste(
-  "Clasifica el comentario en UNA de estas categorías:",
+  "You are a strict text classification robot.",
+  "Classify the provided comment into EXACTLY ONE of the following categories:",
   paste(temas_ia_puro, collapse = "\n"),
-  "Responde ÚNICAMENTE con el nombre del tema. Nada de texto extra.",
+  "",
+  "CRITICAL RULE: Respond ONLY with the exact name of the chosen category. Do not include periods, quote marks, numbers, or any commentary.",
   sep = "\n"
 )
 
-cat("Clasificando comentarios en los nuevos temas de la IA...\n")
+cat("Running localized classification loop with Ollama...\n")
 for (i in 1:nrow(datos_analisis_ia)) {
   comentario_actual <- datos_analisis_ia$comment[i]
+  
   if (is.na(comentario_actual) || nchar(comentario_actual) < 10) {
-    datos_analisis_ia$tema_ia[i] <- as.character(length(temas_ia_puro)) # Asignar a Ruido
+    datos_analisis_ia$tema_ia[i] <- "Noise / Other"
     next
   }
   
-  req <- request("https://api.groq.com/openai/v1/chat/completions") |>
-    req_headers(`Authorization` = paste("Bearer", mi_api_key)) |>
+  req <- request("http://localhost:11434/v1/chat/completions") |>
     req_body_json(list(
-      # model = "llama-3.3-70b-versatile",
-      model = "llama-3.1-8b-instant",
+      model = "llama3.1",
       messages = list(
         list(role = "system", content = prompt_sistema),
-        list(role = "user", content = paste("Comentario:", comentario_actual))
+        list(role = "user", content = paste("Comment to classify:", comentario_actual))
       ),
-      temperature = 0.0, max_tokens = 5
-    )) |> req_error(is_error = function(resp) FALSE)
+      options = list(temperature = 0.0, num_predict = 15) # Fast classification configuration
+    )) |> 
+    req_error(is_error = function(resp) FALSE)
   
   resp <- req_perform(req)
+  
   if (resp_status(resp) == 200) {
-    # Extraemos la cadena de texto completa y le quitamos espacios extra
     respuesta_ia <- stringr::str_trim(resp_body_json(resp)$choices[[1]]$message$content)
     
-    cat(i,". ",respuesta_ia,"----" ,comentario_actual, "\n" )
-    
-    # Asignamos el texto directamente
-    datos_analisis_ia$tema_ia[i] <- respuesta_ia
+    # Strict matching verification
+    if (respuesta_ia %in% temas_ia_puro) {
+      datos_analisis_ia$tema_ia[i] <- respuesta_ia
+    } else {
+      coincidencia <- temas_ia_puro[sapply(temas_ia_puro, function(x) grepl(x, respuesta_ia, ignore.case = TRUE))]
+      datos_analisis_ia$tema_ia[i] <- ifelse(length(coincidencia) == 1, coincidencia[1], "Noise / Other")
+    }
   } else {
-    datos_analisis_ia$tema_ia[i] <- "Error de API"
+    datos_analisis_ia$tema_ia[i] <- "Local Engine Error"
   }
-  Sys.sleep(3)
+  
+  # Micro sleep to prevent local CPU choking, no network limits apply here
+  Sys.sleep(0.05)
+  
+  if (i %% 50 == 0) cat(sprintf("Processed %d / %d documents safely locally.\n", i, nrow(datos_analisis_ia)))
 }
 
+# Filter out unmapped predictions or noise to clean data visualization steps
 datos_analisis_ia <- datos_analisis_ia |>
-  filter(tema_ia %in% temas_ia_puro) 
-
+  filter(tema_ia %in% temas_ia_puro)
 ```
 
 
