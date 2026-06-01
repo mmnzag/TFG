@@ -18,6 +18,8 @@ execute:
 
 
 # Extracción y procesamiento 
+Se importan las bibliotecas necesarias para la manipulación de datos, extracción léxica, formateo, procesamiento paralelo, peticiones a APIs locales y análisis de redes. A continuación, se activa el motor paralelo definiendo múltiples workers y se cargan los datasets serializados previamente preprocesados.
+
 ```{r}
 library(tidyverse)  # Manipulación de datos y visualización
 library(syuzhet)    # Extracción de sentimientos y emociones
@@ -31,7 +33,7 @@ library(jsonlite) # Para procesar la respuesta de la IA
 library(igraph)
 
 # Activamos el motor paralelo
-plan(multisession, workers = 3)
+plan(multisession, workers = 12)
 
 textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
 data_texto <- readRDS("data/data_texto_procesado.rds")
@@ -39,6 +41,11 @@ tabla_roles <- readRDS("data/tabla_roles.rds")
 
 ```
 
+
+# Definición de la inferencia Semántica
+## Función de extracción mediante LLM local
+
+Se define la función analizar_con_ia(), encargada de enviar peticiones HTTP POST a un servidor Ollama local (ejecutando Llama 3.1). La función implementa un prompt estructurado que fuerza al modelo a generar un objeto JSON estricto. Este JSON contiene dos variables: una puntuación de valencia numérica (-5 a 5) y una emoción dominante restringida a las ocho categorías de Plutchik, garantizando así la limpieza y estandarización del output. La temperatura del modelo se fija en 0.0 para eliminar la variabilidad en las inferencias.
 
 ```{r}
 analizar_con_ia <- function(texto) {
@@ -60,9 +67,7 @@ analizar_con_ia <- function(texto) {
       list(role = "user", content = prompt)
     ),
     response_format = list(type = "json_object") ,
-    options = list(
-      temperature = 0.0 
-    )
+    temperature = 0.0 
   )
   
   respuesta <- request(url) |>
@@ -90,7 +95,13 @@ analizar_con_ia <- function(texto) {
 ```
 
 
+## Ejecución paralela
 
+Se lanza un subproceso asíncrono utilizando el paquete future. Este hilo carga el diccionario léxico y evalúa el vector de texto purificado asignando puntuaciones basadas en la frecuencia absoluta de palabras afectivas. El resultado se integra posteriormente en un dataframe para el cálculo de la valencia neta (positivo menos negativo).
+
+Se inicia un segundo núcleo en paralelo para procesar el corpus a través de la API local. El bucle iterativo implementa tolerancia a fallos, un sistema de salto inteligente para retomar extracciones interrumpidas y un mecanismo de autoguardado periódico en disco (.rds). Si la inferencia devuelve un error o un valor no parseable, se registra un NA explícito, asegurando la continuidad del procesamiento masivo.
+
+La sesión principal de R queda en pausa (value()) hasta que ambos procesos paralelos finalizan. Una vez terminados, se combinan las métricas léxicas clásicas con las inferencias del LLM en un único dataset comparativo (data_comparativa), alineando ambas metodologías fila a fila para su contrastación directa.
 ```{r}
 # 2. PURIFICACIÓN ABSOLUTA DE LOS DATOS (El cortafuegos contra igraph)
 # Para el Hilo 1 (NRC)
@@ -208,116 +219,10 @@ cat("✅ ¡Procesamiento paralelo finalizado con éxito! Dataset comparativo lis
 
 
 
-```{r}
-# vector_textos_puros <- unname(as.vector(textos_sentimiento$texto_sentimiento))
-# 
-# # 2. Reconstruimos la tabla columna a columna, forzando a que sean vectores simples
-# tabla_datos_pura <- as.data.frame(lapply(data_texto, function(x) unname(as.vector(x))))
-# # 2. HILO 1: ANÁLISIS LÉXICO CLÁSICO (NRC) --------------------------------
-# # El operador %<-% lanza esto en un núcleo en segundo plano inmediatamente
-# message("-> [HILO 1] Ejecutando análisis NRC con furrr...")
-# 
-# # 2. Análisis en paralelo con furrr
-# sentimientos_raw <- future_map_dfr(
-#   vector_textos_puros, 
-#   ~ get_nrc_sentiment(.x, language = "english"),
-#   # Aquí está la magia: le enviamos el paquete syuzhet a cada núcleo explícitamente
-#   .options = furrr_options(seed = TRUE, packages = c("syuzhet"))
-# )
-# 
-# # 3. Unimos los resultados y calculamos la valencia
-# datos_clasicos_df <- cbind(tabla_datos_pura, sentimientos_raw) |>
-#   mutate(
-#     valencia = positive - negative
-#     # log_score = log1p(score)
-#   )
-# 
-# 
-# # 3. HILO 2: INFERENCIA SEMÁNTICA (LLAMA 3 LOCAL) -------------------------
-# # Este bloque arranca a la vez que el Hilo 1 en otro núcleo
-# datos_ia_future %<-% {
-#   message("-> [HILO 2] Iniciando inferencia con LLM en localhost...")
-#   
-#  print("Iniciando extracción masiva local (Ollama)...")
-#   resultados_ia <- list()
-#   
-#   path_final <- "data/resultados_ia_final.rds"
-#   path_backup <- "data/resultados_ia_backup.rds"
-#   
-#   if (file.exists(path_final)) {
-#     resultados_ia <- readRDS(path_final)
-#     message("✅ Cargado archivo final.")
-#   } else if (file.exists(path_backup)) {
-#     resultados_ia <- readRDS(path_backup)
-#     message("⚠️ Cargado backup intermedio.")
-#   } else {
-#     resultados_ia <- list() 
-#     message("🆕 Iniciando desde cero.")
-#   }
-#   
-#   if (length(resultados_ia) == nrow(data_texto)) {
-#     message("🏁 Todo el dataset ya ha sido procesado. Nada que hacer.")
-#   } else {
-#   
-#     for (i in 1:nrow(data_texto)) {
-#       # Salto inteligente (retomamos por donde nos quedamos)
-#       if (length(resultados_ia) >= i && !is.null(resultados_ia[[i]]) && !is.na(resultados_ia[[i]]$valencia_ia[1])) {
-#         next 
-#       }
-#     
-#       texto_actual <- data_texto$texto_limpio[i] 
-#       print(paste("Consultando localmente fila", i))
-#             # ": ", substr(texto_actual, 1, 40), "..."))
-#       
-#       if (is.na(texto_actual) || nchar(texto_actual) < 2) {
-#         resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-#         next
-#       }
-#       
-#       resultado <- analizar_con_ia(texto_actual) 
-#       
-#       if(is.na(resultado$valencia_ia[1])) {
-#          print("  ❌ Error en Ollama. Guardando NA.")
-#          resultados_ia[[i]] <- tibble(valencia_ia = NA_real_, emocion_ia = NA_character_)
-#       } else {
-#          resultados_ia[[i]] <- resultado
-#          print(paste("  ✅ Éxito:", resultado$emocion_ia[1], "| Valencia:", resultado$valencia_ia[1]))
-#       }
-#       
-#       # El autoguardado te salva la vida, no lo quites
-#       if (i %% 50 == 0) {
-#         print(paste("💾 Autoguardado de progreso local (Fila", i, ")"))
-#         saveRDS(resultados_ia, "data/resultados_ia_backup.rds")
-#       }
-#       
-#     }
-#     
-#     saveRDS(resultados_ia, "data/resultados_ia_final.rds")
-#     cat("🎉 ¡Procesamiento local de ", length(resultados_ia)  ," filas con Ollama finalizado!")
-#   }
-#   
-#   print("¡Extracción finalizada!")
-#   
-#   bind_rows(resultados_ia)
-#     
-# }
-# 
-# cat("Esperando a que ambos motores de inferencia terminen...\n")
-# 
-# # Al llamar a estas variables, R espera a que ambos núcleos (Hilos 1 y 2) terminen su trabajo
-# data_con_sentim <- datos_clasicos_future
-# datos_ia_df <- datos_ia_future
-# 
-# 
-# # 5. FUSIÓN DE RESULTADOS -------------------------------------------------
-# # Como ambos hilos mantuvieron el mismo orden de filas, simplemente pegamos las columnas
-# data_comparativa <- bind_cols(data_con_sentim, datos_ia_df)
-# 
-# 
-# cat("¡Procesamiento paralelo finalizado con éxito! Dataset comparativo listo.\n")
-```
 
-## Limpieza 
+
+# Post-procesamiento y estandarización de datos
+Se ejecuta una canalización  de limpieza mediante expresiones regulares para purificar posibles divergencias o "alucinaciones" textuales generadas por el modelo de lenguaje. Las salidas anómalas se reclasifican forzosamente hacia las raíces lexicográficas de las ocho emociones primarias de Plutchik, estandarizando el formato y eliminando la categoría "Neutral" para facilitar la comparativa de emociones puras.
 ```{r}
 data_comparativa <- data_comparativa |>
   filter(valencia_ia >= -5 & valencia_ia <= 5 & !is.na(valencia_ia)) |>
@@ -350,41 +255,28 @@ data_comparativa <- data_comparativa |>
 print(unique(data_comparativa$emocion_ia))
 ```
 
-
-Para la cuantificación de los estados emocionales presentes en r/technology, se empleó el algoritmo NRC Sentiment Lexicon a través de la librería syuzhet. A diferencia de los análisis binarios (positivo/negativo), este método permite descomponer el discurso en ocho emociones primarias: anger, anticipation, disgust, fear, joy, sadness, surprise y trust.
-
-Los datos fueron normalizados mediante la creación de una métrica de Valencia Neta, definida como la diferencia aritmética entre los términos positivos y negativos de cada intervención. Asimismo, se aplicó una transformación logarítmica (log1p) a la variable score, permitiendo así un análisis estadístico más robusto frente a la naturaleza altamente sesgada de la popularidad en Reddit (donde pocos posts concentran la gran mayoría de los votos).
 ```{r}
-totales_emociones <- data_comparativa |>
-  # Fíjate en el c(...) que envuelve a las emociones
-  summarise(across(c(anticipation, anger, disgust, trust, surprise, sadness, joy, fear), sum)) |>
-  pivot_longer(cols = everything(), names_to = "emocion", values_to = "valor") |>
-  # Excluimos valencia general para ver solo emociones específicas
-  filter(!emocion %in% c("positive", "negative"))
+# =========================================================================
+# EXPORTACIÓN PARA FCA
+# =========================================================================
 
-totales_emociones_ia <- data_comparativa |>
-  filter(!is.na(emocion_ia)) |> # Eliminamos posibles errores de la API
-  count(emocion_ia, name = "valor") 
+# 1. (Opcional) Eliminamos columnas temporales que ya no necesitamos
+data_fca_export <- data_comparativa |>
+  select(-texto_ia) # texto_ia era solo para facilitar el regex
 
-df_nrc <- totales_emociones |>
-  mutate(
-    emocion = str_to_title(emocion),
-    Modelo = "Clásico (NRC)"
-  )
+# 2. Guardamos el objeto en la carpeta data
+# Le ponemos un nombre nuevo para no machacar el data_sentim original
+saveRDS(data_fca_export, file = "data/data_sentim_ia.rds")
 
-# Cogemos los totales de la IA, igualamos el nombre de la columna y etiquetamos
-df_ia <- totales_emociones_ia |>
-  rename(emocion = emocion_ia) |>
-  mutate(Modelo = "IA (Llama 3)")
-
-# Juntamos todo en una sola tabla
-df_perfil_combinado <- bind_rows(df_nrc, df_ia)
-
+cat("\n[INFO] Dataset final guardado con éxito en 'data/data_sentim_ia.rds'.\n")
+cat("[INFO] Listo para ser cargado en el script de Análisis de Conceptos Formales.\n")
 ```
 
 
-# Correlacion clasico vs ia
+# Correlacion clasico vs IA
 
+
+Se evalúa la divergencia métrica a nivel granular aplicando una prueba de correlación no paramétrica de Spearman sobre la valencia de ambas metodologías. A continuación, se grafica un diagrama de dispersión (scatter plot) con ajuste lineal superpuesto (geom_smooth), ilustrando visualmente la falta de consenso entre la asignación léxica aislada y la comprensión semántica contextual.
 ```{r}
 # =========================================================================
 # ANÁLISIS 1: MATRIZ DE CORRELACIÓN Y DISPERSIÓN (NRC vs ia)
@@ -407,17 +299,53 @@ grafico_comparativa <- ggplot(data_comparativa, aes(x = valencia, y = valencia_i
   )
 
 print(grafico_comparativa)
+
+ggsave("images/sa_plot_grafico_correlacion_valencia_nrc_ia.png", grafico_comparativa, width = 10,     # Le damos más anchura
+       height = 6,     # Lo mantenemos bajito para ese efecto panorámico
+       units = "in",  dpi = 300)
 ```
 
 
-# Visualización del perfil emocional global
+
+# Perfil emocional del ecosistema
+Se calculan las frecuencias absolutas de cada emoción detectada por ambos métodos y se transforman a formato largo. Posteriormente, se genera un gráfico de barras agrupadas que superpone el perfil emocional extraído por el algoritmo NRC frente al modelado por la Inteligencia Artificial, visualizando de forma directa el sesgo de clasificación entre metodologías.
+
+```{r}
+totales_emociones <- data_comparativa |>
+  # Fíjate en el c(...) que envuelve a las emociones
+  summarise(across(c(anticipation, anger, disgust, trust, surprise, sadness, joy, fear), sum)) |>
+  pivot_longer(cols = everything(), names_to = "emocion", values_to = "valor") |>
+  # Excluimos valencia general para ver solo emociones específicas
+  filter(!emocion %in% c("positive", "negative"))
+
+totales_emociones_ia <- data_comparativa |>
+  filter(!is.na(emocion_ia)) |> # Eliminamos posibles errores de la API
+  count(emocion_ia, name = "valor") 
+
+df_nrc <- totales_emociones |>
+  mutate(
+    emocion = str_to_title(emocion),
+    Modelo = "Clásico (NRC)"
+  )
+
+# Cogemos los totales de la IA, igualamos el nombre de la columna y etiquetamos
+df_ia <- totales_emociones_ia |>
+  rename(emocion = emocion_ia) |>
+  mutate(Modelo = "IA (Llama 3.1)")
+
+# Juntamos todo en una sola tabla
+df_perfil_combinado <- bind_rows(df_nrc, df_ia)
+
+```
+
+
 ```{r}
 plot_perfil_emocional_global <- ggplot(df_perfil_combinado, aes(x = reorder(emocion, valor), y = valor, fill = Modelo)) +
   # position = "dodge" pone las barras una al lado de la otra en lugar de apilarlas
   geom_col(position = "dodge", alpha = 0.9) + 
   coord_flip() +
   # Usamos colores corporativos/académicos para distinguirlos bien
-  scale_fill_manual(values = c("Clásico (NRC)" = "lightblue", "IA (Llama 3)" = "orange")) + 
+  scale_fill_manual(values = c("Clásico (NRC)" = "lightblue", "IA (Llama 3.1)" = "orange")) + 
   theme_minimal(base_size = 12) +
   labs(
     title = "Comparativa del Perfil Emocional: NRC vs. IA",
@@ -435,14 +363,15 @@ plot_perfil_emocional_global <- ggplot(df_perfil_combinado, aes(x = reorder(emoc
 print(plot_perfil_emocional_global)
 
 # Guardado de alta calidad para el documento final
-ggsave("images/plot_perfil_emocional_global.png", plot_perfil_emocional_global,   dpi = 300)
+ggsave("images/sa_plot_perfil_emocional_global.png", plot_perfil_emocional_global, width = 10,
+       height = 6,     
+       units = "in",  dpi = 300)
 ```
 
 
 
 # Análisis Estadístico: Valencia vs. Score
-
-Esta segunda etapa del análisis se centra en la contrastación estadística entre la carga afectiva del discurso y su repercusión social dentro de la plataforma. El objetivo es determinar si existe un sesgo de respuesta en la comunidad de criptomonedas, evaluando si los mensajes con una polaridad extrema (ya sea euforia alcista o pánico bajista) logran captar una mayor atención en forma de votos, o si la popularidad del contenido se distribuye de manera uniforme independientemente del tono emocional empleado.
+Se investiga el sesgo de interacción social cruzando la métrica de popularidad (votos) con la carga afectiva de los mensajes. Dada la naturaleza de cola larga de la viralidad en redes sociales, se aplica una transformación Log10 al eje Y. Se generan dos gráficos de dispersión independientes (NRC e IA) equipados con curvas de tendencia no lineales basadas en Modelos Aditivos Generalizados (GAM) para detectar posibles picos de engagement en los polos emocionales extremos.
 
 ```{r}
 
@@ -450,7 +379,7 @@ Esta segunda etapa del análisis se centra en la contrastación estadística ent
 cor_test <- cor.test(data_con_sentim$valencia, data_con_sentim$score, method = "spearman")
 label_cor <- paste("Correlación Spearman:", round(cor_test$estimate, 3))
 
-ggplot(data_con_sentim, aes(x = valencia, y = score)) +
+plot_relacion_sentimiento_popularidad <- ggplot(data_con_sentim, aes(x = valencia, y = score)) +
   # Usamos escala logarítmica en Y para manejar la dispersión de votos
   scale_y_log10(labels = comma) +
   # Jitter para evitar que los puntos se solapen
@@ -466,12 +395,16 @@ ggplot(data_con_sentim, aes(x = valencia, y = score)) +
     caption = label_cor
   )
 
+print(plot_relacion_sentimiento_popularidad)
+
+ggsave("images/sa_plot_relacion_sentimiento_popularidad.png", plot_relacion_sentimiento_popularidad, dpi = 300)
+
+
 saveRDS(data_con_sentim, "data/data_sentim.rds")
 
 ```
 
-<!-- Corr nula -> la carga emocional no garantiza éxito del post -->
-<!-- La craga se concentra en en 0 -> comentarios eixtosos informativos o descriptivos. Popularidad indep del tono emocioal -->
+
 
 
 ```{r}
@@ -484,18 +417,24 @@ cor_test_ia <- cor.test(data_score_ia$valencia_ia, data_score_ia$score, method =
 label_cor_ia <- paste("Correlación Spearman (IA):", round(cor_test_ia$estimate, 3))
 
 # Visualización
-ggplot(data_score_ia, aes(x = valencia_ia, y = score)) +
+plot_relacion_sentimiento_popularidad_ia <- ggplot(data_score_ia, aes(x = valencia_ia, y = score)) +
   scale_y_log10(labels = comma) +
   geom_jitter(alpha = 0.3, color = "darkgreen", width = 0.2) +
   geom_smooth(method = "gam", color = "darkorange", size = 1.2) +
   theme_light() +
   labs(
     title = "Relación entre Sentimiento Contextual y Popularidad",
-    subtitle = "Análisis de valencia mediante IA (ia)",
+    subtitle = "Análisis de valencia mediante IA",
     x = "Valencia ia (Pánico -5 <---> 5 Euforia)",
     y = "Score (Escala Log10)",
     caption = label_cor_ia
   )
+
+print(plot_relacion_sentimiento_popularidad_ia)
+
+
+ggsave("images/sa_plot_relacion_sentimiento_popularidad_ia.png", plot_relacion_sentimiento_popularidad_ia, dpi = 300)
+
 ```
 
 
@@ -510,7 +449,7 @@ data_temporal <- data_con_sentim |>
   # Calculamos media móvil de 7 días
   mutate(media_movil = rollmean(valencia_diaria, k = 7, fill = NA, align = "right"))
 
-ggplot(data_temporal, aes(x = fecha)) +
+plot_evo_temp <- ggplot(data_temporal, aes(x = fecha)) +
   geom_line(aes(y = valencia_diaria), alpha = 0.2, color = "grey20") +
   geom_line(aes(y = media_movil), color = "firebrick", size = 1) +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
@@ -521,6 +460,12 @@ ggplot(data_temporal, aes(x = fecha)) +
     x = "Fecha",
     y = "Valencia Media"
   )
+
+print(plot_evo_temp)
+
+ggsave("images/sa_plot_evo_temp.png", plot_evo_temp, width = 10,
+       height = 6,     
+       units = "in",  dpi = 300)
 ```
 
 ```{r}
@@ -561,6 +506,10 @@ grafico_temporal_ia <- ggplot(data_temporal_comparada, aes(x = fecha, y = Tenden
   theme(legend.position = "top")
 
 print(grafico_temporal_ia)
+
+ggsave("images/sa_grafico_temporal_ia.png", grafico_temporal_ia, width = 10,
+       height = 6,     
+       units = "in",  dpi = 300)
 ```
 
 # Perfiles emocionales
@@ -575,12 +524,16 @@ comparativa_hilos <- data_con_sentim |>
   pivot_longer(cols = -url, names_to = "emocion", values_to = "media") |>
   filter(media !=0) 
 
-ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
+plot_micro_contextos <- ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   geom_col() +
   facet_wrap(~url, scales = "free_y", labeller = label_wrap_gen(width = 40)) +
   theme_minimal() +
   theme(legend.position = "none", strip.text = element_text(size = 7)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
+
+print(plot_micro_contextos)
+
+ggsave("images/sa_plot_micro_contextos.png", plot_micro_contextos, dpi = 300)
 ```
 
 
@@ -597,7 +550,7 @@ comparativa_hilos_ia <- data_comparativa |>
 # Visualización Multipanel (Top 15 hilos para evitar saturación)
 top_hilos <- unique(comparativa_hilos_ia$url)[1:15]
 
-comparativa_hilos_ia |>
+plot_micro_contextos_ia <- comparativa_hilos_ia |>
   filter(url %in% top_hilos) |>
   ggplot(aes(x = proporcion, y = emocion_ia, fill = emocion_ia)) +
   geom_col() +
@@ -615,6 +568,11 @@ comparativa_hilos_ia |>
     x = "Proporción del debate",
     y = NULL
   )
+
+
+print(plot_micro_contextos_ia)
+
+ggsave("images/sa_plot_micro_contextos_ia.png", plot_micro_contextos_ia, dpi = 300)
 ```
 
 
@@ -681,6 +639,8 @@ plot_camara_eco <- ggplot(data_echo, aes(x = as.factor(comunidad), y = valencia,
 print(plot_camara_eco)
 
 
+ggsave("images/sa_plot_camara_eco.png", plot_camara_eco, dpi = 300)
+
 ```
 
 
@@ -711,5 +671,8 @@ plot_camara_eco_ia <- ggplot(data_echo_ia, aes(x = as.factor(comunidad), y = val
   )
 
 print(plot_camara_eco_ia)
+
+
+ggsave("images/sa_plot_camara_eco_ia.png", plot_camara_eco_ia, dpi = 300)
 ```
 

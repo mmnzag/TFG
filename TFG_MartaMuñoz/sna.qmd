@@ -85,9 +85,9 @@ mediana_grado <- median(df_grados$grado)
 media_grado   <- mean(df_grados$grado)
 
 distribucion_grado <- ggplot(df_grados, aes(x = grado)) +
-  geom_density(fill = "steelblue", alpha = 0.5, color = "darkblue", size = 1) +
-  geom_vline(aes(xintercept = mediana_grado, linetype = "Mediana"), color = "red", size = 1) +
-  geom_vline(aes(xintercept = media_grado, linetype = "Media"), color = "orange", size = 1) +
+  geom_density(fill = "steelblue", alpha = 0.5, color = "darkblue", linewidth = 1) +
+  geom_vline(aes(xintercept = mediana_grado, linetype = "Mediana"), color = "red", linewidth = 1) +
+  geom_vline(aes(xintercept = media_grado, linetype = "Media"), color = "orange", linewidth = 1) +
   scale_linetype_manual(name = "Estadísticos", values = c("Mediana" = "dashed", "Media" = "dotted")) +
   scale_x_log10(labels = label_number(big.mark = ".", decimal.mark = ",")) +
   theme_minimal() +
@@ -99,7 +99,9 @@ distribucion_grado <- ggplot(df_grados, aes(x = grado)) +
     caption = "Nota: Eje X en escala logarítmica para visualizar la estructura de Ley de Potencia"
   )
 
-ggsave("images/sna_distribucion_grado.png", plot = distribucion_grado,  dpi = 300)
+ggsave("images/sna_distribucion_grado.png", plot = distribucion_grado,  dpi = 300, width = 10,     # Le damos más anchura
+       height = 6,     # Lo mantenemos bajito para ese efecto panorámico
+       units = "in")
 
 print(distribucion_grado)
 ```
@@ -444,7 +446,7 @@ tabla_roles <- grafo_limpio |>
       TRUE ~ "Usuario Regular"
     )
   ) |>
-  mutate(comunidad = community_louvain)
+  mutate(comunidad = community_walktrap)
 print(tabla_roles)
 
 saveRDS(tabla_roles, "data/tabla_roles.rds")
@@ -528,7 +530,7 @@ plot_correlacion_popularidad_control <- ggplot(tabla_roles, aes(x = degree, y = 
 
 print(plot_correlacion_popularidad_control)
 
-ggsave("images/plot_correlacion_popularidad_control.png", plot = plot_correlacion_popularidad_control,  dpi = 300)
+ggsave("images/sna_plot_correlacion_popularidad_control.png", plot = plot_correlacion_popularidad_control,  dpi = 300)
 
 
 ```

@@ -1,0 +1,209 @@
+---
+title: "validacion"
+format: html
+---
+
+# Configuración inicial y dependencias
+Carga de las librerías necesarias para la manipulación de datos (tidyverse), peticiones a la API local (httr2), procesamiento de respuestas (jsonlite) y evaluación de métricas de rendimiento (caret). Se importa el dataset de validación original y se inspeccionan las clases de emociones existentes.
+
+```{r}
+library(tidyverse)  # Manipulación de datos y visualización
+library(viridis)    # Paletas de colores accesibles
+library(httr2)    # Para hacer peticiones 
+library(jsonlite) # Para procesar la respuesta de la IA
+library(igraph)
+library(caret)
+
+datos_val <- read_csv("data/combined_emotion.csv")
+
+unique(datos_val$emotion)
+```
+# Definición del motor de inferencia (LLM)
+Construcción de la función encargada de comunicarse con el modelo local a través de Ollama. Se emplea Prompt Engineering con formato de salida estricto en JSON y temperatura 0.0 para maximizar el determinismo. La función gestiona la petición HTTP y captura posibles errores de conexión o formato, devolviendo NA en caso de fallo.
+
+```{r}
+analizar_con_ia <- function(sentenceo) {
+
+  url <- "http://localhost:11434/v1/chat/completions"
+  
+  prompt <- paste(
+    "Act as an expert in cryptocurrency sentiment analysis.",
+    "Analyze the following Reddit sentence and return ONLY a valid JSON object with one key:",
+    "1.'emocion_ia': You MUST choose EXACTLY ONE word from this list: [fear, sad, love, joy, suprise, anger].",
+    "STRICT RULE: Do not use any words outside that list. Output only the raw JSON format without markdown blocks or conversational sentence.",
+    "sentence to analyze:", sentenceo
+  )
+  
+  cuerpo_peticion <- list(
+    model = "llama3.1", # Asegúrate de que coincide con el que tienes en Ollama
+    messages = list(
+      list(role = "user", content = prompt)
+    ),
+    response_format = list(type = "json_object") ,
+    temperature = 0.0
+  )
+  
+  respuesta <- request(url) |>
+    req_headers(
+      `Content-Type` = "application/json"
+    ) |>
+    req_body_json(cuerpo_peticion) |>
+    req_timeout(300) |> # Damos hasta 5 minutos de margen por petición para hardware local
+    req_error(is_error = function(resp) FALSE) |> 
+    req_perform()
+  
+  if (resp_status(respuesta) == 200) {
+    contenido <- resp_body_json(respuesta)
+    sentenceo_json <- contenido$choices[[1]]$message$content
+    datos_extraidos <- fromJSON(sentenceo_json)
+    
+    return(tibble(
+      emocion_ia = as.character(datos_extraidos$emocion_ia)
+    ))
+  } else {
+    return(tibble(emocion_ia = NA_character_))
+  }
+}
+```
+
+
+# Procesamiento iterativo y gestión del estado
+Muestreo reproducible del dataset original mediante la fijación de semilla (set.seed). Se implementa un bucle de iteración sobre los textos con un sistema de autoguardado (checkpointing) cada 50 iteraciones para prevenir pérdida de datos ante cortes de ejecución. Finaliza consolidando las predicciones y uniéndolas posicionalmente al dataset original.
+
+```{r}
+# 1. FIJAMOS LA SEMILLA. 
+# Esto garantiza que las 2000 filas aleatorias sean SIEMPRE las mismas.
+set.seed(42) 
+datos <- datos_val |> sample_n(size = 500)
+
+resultados_ia <- list()
+
+# 2. ARREGLAMOS LAS RUTAS
+# Las rutas de trabajo y backup DEBEN ser .rds
+path_final_rds <- "data/validacion_ia_final.rds"
+path_backup_rds <- "data/validacion_ia_backup.rds"
+
+if (file.exists(path_final_rds)) {
+  resultados_ia <- readRDS(path_final_rds)
+  message("✅ [H2] Cargado archivo final.")
+} else if (file.exists(path_backup_rds)) {
+  resultados_ia <- readRDS(path_backup_rds)
+  message("⚠️ [H2] Cargado backup intermedio.")
+}
+
+# Iteramos sobre la columna 'sentence' del dataframe 'datos'
+for (i in seq_along(datos$sentence)) {
+  
+  # Si ya hay un resultado válido en esta posición
+  if (length(resultados_ia) >= i && !is.null(resultados_ia[[i]])){
+    next 
+  }
+  
+  sentence_actual <- datos$sentence[i] 
+  print(paste("Consultando localmente fila", i, "de", length(datos$sentence)))
+  
+  if (is.na(sentence_actual) || nchar(trimws(sentence_actual)) < 2) {
+    resultados_ia[[i]] <- tibble(emocion_ia = NA_character_)
+    next
+  }
+  
+  resultado <- analizar_con_ia(sentence_actual) 
+  
+  if(is.na(resultado$emocion_ia[1])) {
+    resultados_ia[[i]] <- tibble(emocion_ia = NA_character_)
+  } else {
+    resultados_ia[[i]] <- resultado
+    print(paste("Fila", i, ":", resultado$emocion_ia)) # Ajustado para imprimir solo la emoción
+  }
+  
+  if (i %% 50 == 0) {
+      print(paste("💾 [H2] Autoguardado de progreso local (Fila", i, ")"))
+      saveRDS(resultados_ia, path_backup_rds)
+  }
+}
+
+# 3. GUARDADOS FINALES CORRECTOS
+# Guardamos la lista final en formato binario por seguridad
+saveRDS(resultados_ia, path_final_rds)
+message("🎉 ¡Procesamiento con Ollama finalizado!")
+
+# Transformamos la lista a dataframe
+datos_completos <- bind_rows(resultados_ia)
+
+# Unimos con el dataset original (ahora sí cuadrarán las filas gracias a set.seed)
+datos_finales <- bind_cols(datos, datos_completos)
+
+# Guardamos el resultado definitivo en CSV
+write_csv(datos_finales, "data/dataset_validacion_con_ia.csv")
+
+```
+
+
+# Limpieza y Normalización Semántica
+Fase de preprocesamiento de las predicciones para corregir "alucinaciones" típicas de los LLM. Se aplican transformaciones vectorizadas (case_when) para solucionar errores tipográficos y reasignar emociones secundarias a las clases primarias del estudio. Las salidas inclasificables se fuerzan a valores nulos (NA).
+
+```{r}
+datos_limpios <- datos_finales |>
+  mutate(emocion_ia = case_when(
+    # 1. Corrección del error tipográfico evidente
+    # 2. Mantener las que son correctas y exactas
+    emocion_ia %in% c("joy", "anger", "sad", "fear", "love", "surprise") ~ emocion_ia,
+    
+    # 3. Mapeo semántico (OPCIONAL): Puedes agrupar las alucinaciones en tus 6 clases
+    # Si en tu TFG prefieres no hacer esto, borra este bloque.
+    emocion_ia %in% c("contentment", "hopeful") ~ "joy",
+    emocion_ia == "anxious" ~ "fear",
+    emocion_ia == "guilt" ~ "sad",
+    emocion_ia %in% c("jealousy", "envy") ~ "anger", 
+    
+    # 4. Cualquier otra cosa ("curious" o fallos futuros) se convierte en NA (nulo)
+    TRUE ~ NA_character_
+  ),
+  emotion = case_when(emotion == "suprise" ~ "surprise",
+                      TRUE ~ emotion)
+  )
+
+# Comprobamos que la limpieza ha sido un éxito
+print(unique(datos_limpios$emocion_ia))
+print(unique(datos_limpios$emotion))
+
+```
+
+
+# Evaluación del rendimiento
+Cálculo de la exactitud del modelo frente a las etiquetas de referencia. Los datos se vectorizan como factores categóricos compartiendo exactamente los mismos niveles (6 clases). Se extraen la Matriz de Confusión, el Accuracy global, el Índice Kappa (para medir la concordancia por encima del azar) y métricas específicas por clase (Sensibilidad, Especificidad, F1).
+
+```{r}
+niveles_emociones <- c("fear", "sad", "love", "joy", "surprise", "anger")
+
+datos_validacion <- datos_limpios |>
+  filter(!is.na(emocion_ia), !is.na(emotion)) |>
+  mutate(
+    emotion = factor(emotion, levels = niveles_emociones),
+    emocion_ia = factor(emocion_ia, levels = niveles_emociones)
+  )
+
+# 3. Calcular la Matriz de Confusión Completa
+matriz_confusion <- confusionMatrix(
+  data = datos_validacion$emocion_ia,
+  reference = datos_validacion$emotion
+)
+
+# 4. Mostrar el reporte completo en consola
+print(matriz_confusion)
+
+# 5. Extraer métricas específicas para tus tablas del TFG
+accuracy_global <- matriz_confusion$overall["Accuracy"]
+kappa_global <- matriz_confusion$overall["Kappa"]
+metricas_por_clase <- matriz_confusion$byClass
+
+# Imprimir un resumen limpio
+cat("\n================ REPORTE RECOGIDO PARA EL TFG ================\n")
+cat("Exactitud Global (Accuracy):", round(accuracy_global * 100, 2), "%\n")
+cat("Índice Kappa de Cohen:", round(kappa_global, 4), "\n")
+cat("==============================================================\n")
+
+# Si quieres ver las métricas detalladas por cada emoción (Sensibilidad, Especificidad, F1-Score):
+print(metricas_por_clase[, c("Sensitivity", "Specificity", "F1")])
+```
+

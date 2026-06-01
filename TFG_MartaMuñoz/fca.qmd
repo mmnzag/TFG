@@ -26,10 +26,10 @@ library(httr2)
 modelo_lda <- readRDS("data/modelo_lda.rds") 
 tabla_roles <- readRDS("data/tabla_roles.rds")
 data_texto <- readRDS("data/data_texto_procesado.rds")
-data_sentim <- readRDS("data/data_sentim.rds")
+data_sentim <- readRDS("data/data_sentim_ia.rds")
 nombres_temas <- readRDS("data/nombres_temas.rds")
+df_temas <- readRDS("data/df_temas_ia.rds")
 
-mi_api_key <- keyring::key_get(service = "groq", username = "mi_cuenta_api")
 ```
 
 
@@ -46,12 +46,12 @@ En esta fase, unificamos las tres dimensiones de nuestro análisis (modelado de 
 
 ```{r}
 # 1. Extraer las probabilidades de temas (Gamma)
-gamma_matrix <- modelo_lda@gamma
-colnames(gamma_matrix) <- nombres_temas # "Market Trends", "Debt Crisis", etc.
-
-df_temas <- as.data.frame(gamma_matrix)
-# El slot @documents contiene los IDs (1, 10, 100...) que coinciden con comment_id
-df_temas$comment_id <- modelo_lda@documents
+# gamma_matrix <- modelo_lda@gamma
+# colnames(gamma_matrix) <- nombres_temas # "Market Trends", "Debt Crisis", etc.
+# 
+# df_temas <- as.data.frame(gamma_matrix)
+# # El slot @documents contiene los IDs (1, 10, 100...) que coinciden con comment_id
+# df_temas$comment_id <- modelo_lda@documents
 
 
 # 2. Unificar los tres datasets
@@ -59,32 +59,50 @@ df_integrado <- data_sentim |>
   # Cruzamos con los temas (nos quedamos con los 700 que tienen tema)
   inner_join(df_temas, by = "comment_id") |>
   # Cruzamos con las métricas de red del autor
-  left_join(tabla_roles, by = c("author" = "Usuario")) |>
+  left_join(tabla_roles, by = c("author" = "name")) |>
   # Filtramos por si algún autor no estaba en la tabla de roles
   filter(!is.na(Rol))
 ```
 
 
 ```{r}
-# Calcular umbrales (Tercer cuartil = el 25% más alto)
-umbral_influencia <- quantile(df_integrado$PageRank, 0.75, na.rm = TRUE)
-umbral_intermediacion <- quantile(df_integrado$Intermediacion, 0.75, na.rm = TRUE)
-umbral_engagement <- quantile(df_integrado$score, 0.75, na.rm = TRUE)
+# 1. Calcular umbrales (Q1 = 25% más bajo, Q3 = 25% más alto)
+# Influencia (PageRank)
+q1_influencia <- quantile(df_integrado$PageRank, 0.25, na.rm = TRUE)
+q3_influencia <- quantile(df_integrado$PageRank, 0.75, na.rm = TRUE)
 
-# Binarizar el dataframe
+# Intermediación (Puente)
+q1_intermediacion <- quantile(df_integrado$Intermediacion, 0.25, na.rm = TRUE)
+q3_intermediacion <- quantile(df_integrado$Intermediacion, 0.75, na.rm = TRUE)
+
+# Impacto (Score)
+q1_engagement <- quantile(df_integrado$score, 0.25, na.rm = TRUE)
+q3_engagement <- quantile(df_integrado$score, 0.75, na.rm = TRUE)
+
+# 2. Binarizar el dataframe con la nueva granularidad
 df_fca <- df_integrado |>
   mutate(
     # --- A. ATRIBUTOS DE RED (Autor) ---
-    Autor_Alta_Influencia = ifelse(PageRank >= umbral_influencia, 1, 0),
-    Autor_Alto_Puente = ifelse(Intermediacion >= umbral_intermediacion, 1, 0),
+    # Influencia (PageRank)
+    Autor_Alta_Influencia  = ifelse(pagerank >= q3_influencia, 1, 0),
+    Autor_Media_Influencia = ifelse(pagerank > q1_influencia & pagerank < q3_influencia, 1, 0),
+    Autor_Baja_Influencia  = ifelse(pagerank <= q1_influencia, 1, 0),
     
-    # Binarizar las comunidades (asumo que la 1 y 2 son las principales, ajústalo si hay más)
-    Autor_Comunidad_1 = ifelse(Comunidad == "1", 1, 0),
-    Autor_Comunidad_2 = ifelse(Comunidad == "2", 1, 0),
-    Autor_Comunidad_3 = ifelse(Comunidad == "3", 1, 0),
-    Autor_Comunidad_4 = ifelse(Comunidad == "4", 1, 0),
-    Autor_Comunidad_5 = ifelse(Comunidad == "5", 1, 0),
-    Autor_Comunidad_6 = ifelse(Comunidad == "6", 1, 0),
+    # Puente (Intermediación)
+    Autor_Alto_Puente  = ifelse(betweenness >= q3_intermediacion, 1, 0),
+    Autor_Medio_Puente = ifelse(betweenness > q1_intermediacion & betweenness < q3_intermediacion, 1, 0),
+    Autor_Bajo_Puente  = ifelse(betweenness <= q1_intermediacion, 1, 0),
+    
+    # Binarizar las comunidades
+    Autor_Comunidad_1 = ifelse(comunidad == "1", 1, 0),
+    Autor_Comunidad_2 = ifelse(comunidad == "2", 1, 0),
+    Autor_Comunidad_3 = ifelse(comunidad == "3", 1, 0),
+    Autor_Comunidad_4 = ifelse(comunidad == "4", 1, 0),
+    Autor_Comunidad_5 = ifelse(comunidad == "5", 1, 0),
+    Autor_Comunidad_6 = ifelse(comunidad == "6", 1, 0),
+    Autor_Comunidad_7 = ifelse(comunidad == "7", 1, 0),
+    Autor_Comunidad_8 = ifelse(comunidad == "8", 1, 0),
+
     
     Autor_Rol_Regular = ifelse(Rol == "Usuario Regular", 1, 0),
     Autor_Rol_Broker = ifelse(Rol == "Broker (Conector)", 1, 0),
@@ -92,55 +110,61 @@ df_fca <- df_integrado |>
     Autor_Rol_Hub = ifelse(Rol == "Hub (Difusor activo)", 1, 0),
     
     # --- B. ATRIBUTOS DE ENGAGEMENT Y SENTIMIENTO (Comentario) ---
-    Coment_Alto_Impacto = ifelse(score >= umbral_engagement, 1, 0),
+    # Impacto (Score)
+    Coment_Alto_Impacto  = ifelse(score >= q3_engagement, 1, 0),
+    Coment_Medio_Impacto = ifelse(score > q1_engagement & score < q3_engagement, 1, 0),
+    Coment_Bajo_Impacto  = ifelse(score <= q1_engagement, 1, 0),
     
     # Valencia neta (positiva o negativa)
-    Sent_Muy_Positivo = ifelse(valencia >= 3, 1, 0),
-    Sent_Muy_Negativo = ifelse(valencia <= -3, 1, 0),
-    Sent_Positivo     = ifelse(valencia >= 1 & valencia < 3, 1, 0),
-    Sent_Negativo     = ifelse(valencia <= -1 & valencia > -3, 1, 0),
-    Sent_Neutro       = ifelse(valencia > -1 & valencia < 1, 1, 0),
+    Sent_Muy_Positivo = ifelse(valencia_ia >= 3, 1, 0),
+    Sent_Muy_Negativo = ifelse(valencia_ia <= -3, 1, 0),
+    Sent_Positivo     = ifelse(valencia_ia >= 1 & valencia_ia < 3, 1, 0),
+    Sent_Negativo     = ifelse(valencia_ia <= -1 & valencia_ia > -3, 1, 0),
+    Sent_Neutro       = ifelse(valencia_ia > -1 & valencia_ia < 1, 1, 0),
     
-    # Presencia de emociones (basta con que haya 1 palabra de esa emoción)
-    Emocion_Confianza = ifelse(trust > 0, 1, 0),
-    Emocion_Anticipacion = ifelse(anticipation > 0, 1, 0),
-    Emocion_Miedo = ifelse(fear > 0, 1, 0),
-    Emocion_Ira = ifelse(anger > 0, 1, 0),
-    Emocion_Alegria = ifelse(joy > 0, 1, 0),
-    Emocion_Tristeza = ifelse(sadness > 0, 1, 0),
-    Emocion_Sorpresa = ifelse(surprise > 0, 1, 0),
-    Emocion_Asco = ifelse(disgust > 0, 1, 0),
+    # Presencia de emociones
+    Emocion_Confianza    = ifelse(!is.na(emocion_ia) & emocion_ia == "Trust", 1, 0),
+    Emocion_Anticipacion = ifelse(!is.na(emocion_ia) & emocion_ia == "Anticipation", 1, 0),
+    Emocion_Miedo        = ifelse(!is.na(emocion_ia) & emocion_ia == "Fear", 1, 0),
+    Emocion_Ira          = ifelse(!is.na(emocion_ia) & emocion_ia == "Anger", 1, 0),
+    Emocion_Alegria      = ifelse(!is.na(emocion_ia) & emocion_ia == "Joy", 1, 0),
+    Emocion_Tristeza     = ifelse(!is.na(emocion_ia) & emocion_ia == "Sadness", 1, 0),
+    Emocion_Sorpresa     = ifelse(!is.na(emocion_ia) & emocion_ia == "Surprise", 1, 0),
+    Emocion_Asco         = ifelse(!is.na(emocion_ia) & emocion_ia == "Disgust", 1, 0),
     
     # --- C. ATRIBUTOS TEMÁTICOS (LDA) ---
-    # Asignamos un 1 si la probabilidad del tema supera el 15% (0.15)
-    Tema_MarketTrends = ifelse(`Market Trends` > 0.15, 1, 0),
-    Tema_DebtCrisis = ifelse(`Debt Crisis` > 0.15, 1, 0),
-    Tema_TrumpScam = ifelse(`Trump Scam` > 0.15, 1, 0),
-    Tema_GlobalCurrency = ifelse(`Global Currency` > 0.15, 1, 0),
-    Tema_BlockchainTech = ifelse(`Blockchain Tech` > 0.15, 1, 0),
-    Tema_MarketCrash = ifelse(`Market Crash` > 0.15, 1, 0)
+    # Nota: Para LDA es mejor mantener un umbral fijo (0.15) en lugar de cuartiles. 
+    # Al ser probabilidades dispersas, los cuartiles bajos suelen ser exactamente 0.
+    Tema_CryptoCriticism = ifelse(`Cryptocurrency Criticism` > 0.15, 1, 0),
+    Tema_BlockchainTech  = ifelse(`Blockchain Technology` > 0.15, 1, 0),
+    Tema_InvestScams     = ifelse(`Investment and Scams` > 0.15, 1, 0),
+    Tema_PriceFluct      = ifelse(`Price Fluctuations` > 0.15, 1, 0),
+    Tema_ExchangeMistake = ifelse(`Crypto Exchange Mistakes` > 0.15, 1, 0),
+    Tema_IllicitActivity = ifelse(`Illicit Activities` > 0.15, 1, 0),
+    Tema_MarketAnalysis  = ifelse(`Market Analysis` > 0.15, 1, 0),
+    Tema_TechIntegration = ifelse(`Technology Integration` > 0.15, 1, 0)
   )
 
-# 4. Limpiar la matriz final
-# Nos quedamos SOLAMENTE con las columnas binarizadas que acabamos de crear
+# 3. Limpiar la matriz final (Añadiendo las nuevas columnas)
 matriz_fca_limpia <- df_fca |>
   select(
-    # Atributos de Autor
-    Autor_Alta_Influencia, Autor_Alto_Puente, 
+    # Atributos de Autor (Actualizados con Media y Baja)
+    Autor_Alta_Influencia, Autor_Media_Influencia, Autor_Baja_Influencia, 
+    Autor_Alto_Puente, Autor_Medio_Puente, Autor_Bajo_Puente,
     Autor_Comunidad_1, Autor_Comunidad_2, Autor_Comunidad_3, 
     Autor_Comunidad_4, Autor_Comunidad_5, Autor_Comunidad_6,
     Autor_Rol_Regular, Autor_Rol_Broker, Autor_Rol_Autoridad, Autor_Rol_Hub,
     
-    # Atributos de Comentario/Sentimiento
-    Coment_Alto_Impacto, 
+    # Atributos de Comentario/Sentimiento (Actualizados)
+    Coment_Alto_Impacto, Coment_Medio_Impacto, Coment_Bajo_Impacto,
     Sent_Muy_Positivo, Sent_Muy_Negativo, Sent_Positivo, Sent_Negativo, Sent_Neutro,
     Emocion_Confianza, Emocion_Anticipacion, Emocion_Miedo, Emocion_Ira, 
     Emocion_Alegria, Emocion_Tristeza, Emocion_Sorpresa, Emocion_Asco,
     
     # Atributos de Temas
-    Tema_MarketTrends, Tema_DebtCrisis, Tema_TrumpScam, 
-    Tema_GlobalCurrency, Tema_BlockchainTech, Tema_MarketCrash
-  )
+    Tema_CryptoCriticism, Tema_BlockchainTech, Tema_InvestScams, Tema_PriceFluct, 
+    Tema_ExchangeMistake, Tema_IllicitActivity , Tema_MarketAnalysis, Tema_TechIntegration 
+    )
 
 # Asignar el comment_id como nombre de fila
 rownames(matriz_fca_limpia) <- make.unique(as.character(df_fca$comment_id))
@@ -150,6 +174,7 @@ matriz_fca_final <- as.matrix(matriz_fca_limpia)
 ```
 
 
+# Inicialización del contexto formal
 
 En esta celda inicializamos el motor matemático de FCA para extraer todas las estructuras subyacentes de la red. El algoritmo calcula dos elementos clave: los Conceptos Formales (grupos cerrados de usuarios y atributos) y las Implicaciones (reglas lógicas de causa y efecto del tipo $A \rightarrow B$).
 ```{r}
@@ -190,16 +215,13 @@ Filtro de Soporte: Nos quedamos únicamente con las reglas que tienen un soporte
 Traducción Semántica: Convertimos estas reglas lógicas a texto plano y las enviamos a un Modelo de Lenguaje (Llama 3 vía Groq). La IA actúa como un puente semántico, traduciendo la sintaxis formal a conclusiones legibles sobre psicología de masas y dinámicas de la red social.
 
 ```{r}
-# 1. Extraer las reglas y filtrarlas (para no gastar tokens en reglas irrelevantes)
-# Filtramos por confianza alta para que la IA solo analice patrones reales
-# reglas_filtradas <- fc$implications[fc$implications$confidence() > 0.8]
-indices <- which(fc$implications$support() > 0.1)
+# 1. Extraer las reglas y filtrarlas
+indices <- which(fc$implications$support() > 0.05)
 
 # 2. Creamos el subconjunto de reglas usando esos índices
 reglas_filtradas <- fc$implications[indices]
 
 # Convertir las reglas a un formato de texto legible
-# Esto creará una lista de: "Atributos_A -> Atributos_B"
 texto_reglas <- capture.output(print(reglas_filtradas))
 texto_reglas_unificado <- paste(texto_reglas, collapse = "\n")
 
@@ -215,23 +237,28 @@ prompt_fca <- paste(
   texto_reglas_unificado
 )
 
-# 3. Llamada a la API
-respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(
-    `Authorization` = paste("Bearer", mi_api_key)
-  ) |>
+# 3. Llamada a la API LOCAL de Ollama
+# El endpoint por defecto de Ollama cuando corre en tu máquina es el puerto 11434
+respuesta_fca <- request("http://localhost:11434/api/chat") |>
   req_body_json(list(
-    model = "llama-3.3-70b-versatile",
+    model = "qwen2.5", 
     messages = list(list(role = "user", content = prompt_fca)),
-    temperature = 0.5 # Subimos un poco la temperatura para que el lenguaje sea más natural
+    stream = FALSE,   # Crucial para que R reciba el texto completo de golpe y no por tokens
+    options = list(
+      temperature = 0.5
+    )
   )) |>
+  # Aumentamos el timeout a 5 minutos por si tu ordenador tarda en generar la respuesta
+  req_timeout(300) |> 
   req_perform()
 
 # 4. Procesar y ver el resultado
-interpretacion_fca_imp <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
+interpretacion_fca_imp <- resp_body_json(respuesta_fca)$message$content
+
+cat("\n--- INTERPRETACIÓN CON QWEN (LOCAL) ---\n")
 cat(interpretacion_fca_imp)
 ```
-Los resultados obtenidos son tremendamente reveladores. La IA ha logrado identificar mecánicas sociales complejas de forma autónoma. Por ejemplo, ha deducido lógicamente que la etiqueta de red "Broker" implica directamente una alta capacidad de puenteo (Autor_Alto_Puente), validando el papel de estos usuarios como conectores estructurales. Además, ha detectado patrones puramente emocionales, revelando que cuando un usuario regular combina confianza, alegría y sorpresa, desencadena matemáticamente un clima de anticipación y engagement en el resto de la comunidad.
+
 
 
 ```{r}
@@ -285,7 +312,7 @@ head(tabla_conceptos, 10)
 
 
 
-## Visualización
+## Análisis exploratorio y visualización
 
 
 ```{r}
@@ -298,9 +325,7 @@ resumen_atributos <- data.frame(
 
 # resumen_atributos <- resumen_atributos[order(-resumen_atributos$Porcentaje), ]
 resumen_atributos[order(resumen_atributos$Atributo),]
-# 
-# DT::datatable(resumen_atributos, 
-#               caption = "Tabla Descriptiva: Distribución de Atributos en la Red")
+
 ```
 
 ```{r}
@@ -342,7 +367,6 @@ Una vez aislados y ordenados los 20 perfiles más dominantes de la red, los empa
 matriz_int_normal <- as.matrix(fc$concepts$intents())
 
 # 2. Cogemos los nombres de los atributos directamente de tu matriz original
-# (Esto evita cualquier problema de pérdida de nombres)
 nombres_atributos <- colnames(matriz_fca_final)
 
 # 3. Calculamos los soportes reales
@@ -355,18 +379,15 @@ indices_interesantes <- which(colSums(matriz_int_normal > 0) >= 3 & soportes_rea
 if(length(indices_interesantes) > 0) {
   
   # Ordenar de mayor a menor soporte y coger solo los 20 más importantes
-  # (Para no saturar a la IA de Groq)
   indices_interesantes <- indices_interesantes[order(soportes_reales[indices_interesantes], decreasing = TRUE)]
   if(length(indices_interesantes) > 20) indices_interesantes <- indices_interesantes[1:20]
   
   # Construir las líneas de texto
   lineas_ia <- sapply(indices_interesantes, function(i) {
-    # Usamos > 0 en lugar de == 1
     atributos_activos <- nombres_atributos[matriz_int_normal[, i] > 0]
     
     if(length(atributos_activos) > 0) {
       soporte_actual <- round(soportes_reales[i])
-      # Añadimos cuántos comentarios tiene para que la IA pondere su importancia
       return(paste("- Patrón (en", soporte_actual, "comentarios):", paste(atributos_activos, collapse = ", ")))
     } else {
       return(NULL)
@@ -383,17 +404,6 @@ if(length(indices_interesantes) > 0) {
 }
 
 # 1. Definimos el prompt definitivo
-# prompt_ia_conceptos <- paste(
-#   "Eres un analista experto en sociología digital y análisis de redes sociales (SNA) en Reddit.",
-#   "He realizado un Trabajo de Fin de Grado usando Análisis de Conceptos Formales (FCA) para integrar métricas de red, Topic Modeling y Análisis de Sentimientos.",
-#   "A continuación te presento los patrones estructurales más relevantes de mi red. Cada patrón muestra los atributos que aparecen juntos simultáneamente y el número de comentarios que respaldan esa estructura.",
-#   "Tu tarea es 'traducir' cada patrón a una conclusión analítica clara y profesional.",
-#   "Por ejemplo, si un patrón une 'Alta_Influencia', 'Tema_Crash' y 'Sent_Muy_Negativo', puedes interpretarlo como: 'Los líderes de opinión están capitalizando el tema del crash del mercado para generar un discurso pesimista y alarmista'.",
-#   "Por favor, redacta un párrafo breve (2-3 líneas) por cada patrón explicando la dinámica social que representa.",
-#   "Patrones detectados:\n",
-#   texto_final_ia
-# )
-
 prompt_ia_conceptos <- paste(
   "Actúa como un sociólogo computacional experto en análisis de discurso en Reddit.",
   "Contexto: He analizado una comunidad de criptomonedas/finanzas usando FCA.",
@@ -407,28 +417,24 @@ prompt_ia_conceptos <- paste(
   texto_final_ia
 )
 
-# 2. Hacemos la petición a la API de Groq
-# Nota: Asegúrate de tener tu API key cargada con Sys.setenv(GROQ_API_KEY = "tu_clave")
-respuesta_fca <- request("https://api.groq.com/openai/v1/chat/completions") |>
-  req_headers(
-    `Authorization` = paste("Bearer",mi_api_key)
-  ) |>
+# 2. Llamada a la API LOCAL de Ollama (Usando Qwen)
+respuesta_fca_conc <- request("http://localhost:11434/api/chat") |>
   req_body_json(list(
-    model = "llama-3.3-70b-versatile",
+    model = "qwen", # Nombre exacto del modelo local
     messages = list(list(role = "user", content = prompt_ia_conceptos)),
-    temperature = 0.4 # Temperatura media-baja para que sea analítico y no invente
+    stream = FALSE, # Recibir respuesta completa de una vez
+    options = list(
+      temperature = 0.4 # Temperatura baja para que sea analítico y no invente
+    )
   )) |>
+  req_timeout(300) |> # Damos margen de 5 minutos al procesamiento local
   req_perform()
 
 # 3. Extraemos y mostramos la respuesta en la consola
-interpretacion_fca_conc <- resp_body_json(respuesta_fca)$choices[[1]]$message$content
+interpretacion_fca_conc <- resp_body_json(respuesta_fca_conc)$message$content
 
-cat("\n--- ANÁLISIS DE LA IA ---\n\n")
+cat("\n### Conclusiones Sociológicas Inferidas (vía Qwen Local)\n\n")
 cat(interpretacion_fca_conc)
 ```
-La tabla superior muestra la interpretación automatizada de los 20 patrones de comportamiento más dominantes en la red, generada por el modelo Llama 3 a partir de los Conceptos Formales exactos. Los resultados revelan una clara dicotomía en el comportamiento de la comunidad:
 
-Por un lado, los patrones con mayor soporte (presentes en más de 100 comentarios) están fuertemente dominados por emociones de "Confianza", "Anticipación" y "Alegría". La IA interpreta esto como un mecanismo de creación de capital social, donde los usuarios regulares retroalimentan el optimismo (probablemente ante subidas del mercado o anuncios tecnológicos), actuando como conectores de información.
-
-Por otro lado, a partir del patrón con soporte de 92 comentarios, observamos la irrupción de la "Ira", el "Miedo" y la "Tristeza". El modelo sociológico asocia correctamente estas agrupaciones formales a momentos de tensión, identificando la presencia de dinámicas de polarización y sesgo de confirmación alimentadas por usuarios escépticos o trolls. En resumen, la automatización confirma empíricamente que la red se divide entre la euforia colectiva y el escepticismo reactivo.
 
