@@ -139,7 +139,7 @@ ui <- dashboardPage(
             status = "primary",
             solidHeader = TRUE,
             uiOutput("sent_titulo"),
-            plotOutput("sent_plot", height = 650)
+            imageOutput("sent_plot", height = 650)
           )
         )
       ),
@@ -168,7 +168,7 @@ ui <- dashboardPage(
             status = "primary",
             solidHeader = TRUE,
             uiOutput("topic_titulo"),
-            plotOutput("topic_plot", height = 650)
+            imageOutput("topic_plot", height = 650)
           )
         )
       ),
@@ -232,14 +232,14 @@ server <- function(input, output, session) {
   # Función para comunicarse con Ollama
   explain_with_ollama <- function(prompt) {
     tryCatch({
-      resp <- httr2::request("http://localhost:11434/api/chat") %>%
+      resp <- httr2::request("http://localhost:11434/api/chat") |>
         httr2::req_body_json(list(
           model = "qwen2.5",
           messages = list(list(role = "user", content = prompt)),
           stream = FALSE,
           options = list(temperature = 0.30)
-        )) %>%
-        httr2::req_timeout(120) %>%
+        )) |>
+        httr2::req_timeout(120) |>
         httr2::req_perform()
       parsed <- httr2::resp_body_json(resp)
       if (!is.null(parsed$message$content)) parsed$message$content else "Sin respuesta de Ollama."
@@ -249,11 +249,23 @@ server <- function(input, output, session) {
   }
   
   observeEvent(input$sent_metodo, {
-    updateSelectInput(session, "sent_grafico", choices = sent_graficos[[input$sent_metodo]])
+    opciones <- sent_graficos[[input$sent_metodo]]
+    updateSelectInput(
+      session, 
+      "sent_grafico", 
+      choices = opciones,
+      selected = opciones[1] # Forzamos a que se seleccione el primero
+    )
   }, ignoreInit = TRUE)
   
   observeEvent(input$topic_metodo, {
-    updateSelectInput(session, "topic_grafico", choices = topic_graficos[[input$topic_metodo]])
+    opciones <- topic_graficos[[input$topic_metodo]]
+    updateSelectInput(
+      session, 
+      "topic_grafico", 
+      choices = opciones,
+      selected = opciones[1] # Forzamos a que se seleccione el primero
+    )
   }, ignoreInit = TRUE)
   
   observeEvent(input$fca_metodo, {
@@ -279,6 +291,37 @@ server <- function(input, output, session) {
     tags$p(tags$strong(metodo), style = "color: #555; margin-bottom: 12px;")
   })
   
+  # --- Renderizado nativo de imágenes ---
+  output$sent_plot <- renderImage({
+    req(input$sent_grafico)
+    ruta <- file.path("images", input$sent_grafico)
+    
+    validate(need(file.exists(ruta), paste("No se encontró la imagen en la carpeta 'images':", input$sent_grafico)))
+    
+    list(
+      src = ruta,
+      contentType = "image/png",
+      width = "100%", # Ajusta la imagen al ancho del panel
+      height = "auto",
+      alt = "Gráfico de sentimiento"
+    )
+  }, deleteFile = FALSE) # deleteFile = FALSE es crucial para que no borre tu foto original
+  
+  output$topic_plot <- renderImage({
+    req(input$topic_grafico)
+    ruta <- file.path("images", input$topic_grafico)
+    
+    validate(need(file.exists(ruta), paste("No se encontró la imagen en la carpeta 'images':", input$topic_grafico)))
+    
+    list(
+      src = ruta,
+      contentType = "image/png",
+      width = "100%",
+      height = "auto",
+      alt = "Gráfico de temas"
+    )
+  }, deleteFile = FALSE)
+  
   # --- SNA (sna.qmd) ---
   grafo_reddit <- reactiveVal(NULL)
   
@@ -286,17 +329,33 @@ server <- function(input, output, session) {
     if (!is.null(grafo_reddit())) return(invisible(TRUE))
     
     data_sna <- readRDS("data/data_sna.rds")
-    data_sna <- count(data_sna, from, to, name = "weight")
+    data_sna <- dplyr::count(data_sna, from, to, name = "weight")
     
-    g <- as_tbl_graph(data_sna, directed = TRUE) |>
-      activate("nodes") |>
-      mutate(
-        degree = centrality_degree(mode = "all"),
-        betweenness = centrality_betweenness(directed = TRUE),
-        closeness = centrality_closeness(mode = "all"),
-        pagerank = centrality_pagerank(),
-        eigenvector = centrality_eigen()
+    # 1. Creamos el grafo y calculamos las métricas
+    g <- tidygraph::as_tbl_graph(data_sna, directed = TRUE) |>
+      tidygraph::activate("nodes") |>
+      dplyr::mutate(
+        degree = tidygraph::centrality_degree(mode = "all"),
+        betweenness = tidygraph::centrality_betweenness(directed = TRUE),
+        closeness = tidygraph::centrality_closeness(mode = "all"),
+        pagerank = tidygraph::centrality_pagerank(),
+        eigenvector = tidygraph::centrality_eigen()
       )
+    
+    # 2. Le pegamos los roles de tu archivo tabla_roles.rds
+    if (file.exists("data/tabla_roles.rds")) {
+      tabla_roles <- readRDS("data/tabla_roles.rds")
+      
+      g <- g |>
+        tidygraph::activate("nodes") |>
+        # Unimos usando el nombre del usuario
+        dplyr::left_join(dplyr::select(tabla_roles, name, Rol), by = "name")
+    } else {
+      # Si por algún motivo no encuentra el archivo, creamos la columna vacía
+      g <- g |> 
+        tidygraph::activate("nodes") |> 
+        dplyr::mutate(Rol = NA_character_)
+    }
     
     grafo_reddit(g)
     invisible(TRUE)
@@ -362,8 +421,8 @@ server <- function(input, output, session) {
       g = g0
     )
     
-    nodes <- g1 %>%
-      activate("nodes") %>%
+    nodes <- g1 |>
+      activate("nodes") |>
       as_tibble()
     
     # Control de seguridad: Si los sliders filtran todo, avisamos al usuario
@@ -379,7 +438,7 @@ server <- function(input, output, session) {
       "#8fb9d4"
     }
     
-    nodes <- nodes %>%
+    nodes <- nodes |>
       mutate(
         id = name,
         label = ifelse(isTRUE(input$sna_show_labels), name, ""),
@@ -394,9 +453,9 @@ server <- function(input, output, session) {
         color = color_nodos
       )
     
-    edges <- g1 %>%
-      activate("edges") %>%
-      as_tibble() %>%
+    edges <- g1 |>
+      activate("edges") |>
+      as_tibble() |>
       mutate(
         # MAGIA AQUÍ: Mapeamos el índice numérico al nombre real del nodo
         from = nodes$id[from],
@@ -409,14 +468,17 @@ server <- function(input, output, session) {
     nodes <- as.data.frame(nodes)
     edges <- as.data.frame(edges)
     
-    visNetwork(nodes, edges, height = "650px") %>%
-      visNodes(shadow = list(enabled = TRUE, size = 20)) %>%
-      visEdges(arrows = "to", smooth = TRUE, color = list(highlight = "#FF7034")) %>%
+    visNetwork(nodes, edges, height = "650px") |>
+      # 1. Calculamos el diseño en R y apagamos las físicas de rebote (red rígida)
+      visIgraphLayout(layout = "layout_with_fr") |> 
+      visNodes(shadow = list(enabled = TRUE, size = 20)) |>
+      # 2. smooth = FALSE hace que las líneas sean rectas y pierdan la curva elástica
+      visEdges(arrows = "to", smooth = FALSE, color = list(highlight = "#FF7034")) |>
       visOptions(
         highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE),
         nodesIdSelection = list(enabled = TRUE, useLabels = TRUE)
-      ) %>%
-      visInteraction(navigationButtons = TRUE, zoomView = TRUE) %>%
+      ) |>
+      visInteraction(navigationButtons = TRUE, zoomView = TRUE) |>
       visEvents(
         selectNode = "function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('sna_node', event.nodes[0], {priority:'event'}); } }"
       )
@@ -431,10 +493,10 @@ server <- function(input, output, session) {
     req(input$sna_node)
     load_grafo_reddit()
     node_name <- input$sna_node
-    node_data <- grafo_reddit() %>%
-      activate("nodes") %>%
-      as_tibble() %>%
-      filter(name == node_name) %>%
+    node_data <- grafo_reddit() |>
+      activate("nodes") |>
+      as_tibble() |>
+      filter(name == node_name) |>
       slice(1)
     validate(need(nrow(node_data) == 1, "Nodo no encontrado."))
 
@@ -488,6 +550,7 @@ server <- function(input, output, session) {
   fca_net_positions <- reactiveVal(NULL)
   
   build_matriz_fca <- function() {
+    # 1. Cargar los datos y preparar cruces
     modelo_lda <- readRDS("data/modelo_lda.rds") 
     tabla_roles <- readRDS("data/tabla_roles.rds")
     data_texto <- readRDS("data/data_texto_procesado.rds")
@@ -496,31 +559,20 @@ server <- function(input, output, session) {
     nombres_temas <- readRDS("data/nombres_temas.rds")
     df_temas <- as.data.frame(readRDS("data/df_temas_ia.rds"), stringsAsFactors = FALSE, check.names = FALSE)
     
+    if ("name" %in% names(tabla_roles) && !"Usuario" %in% names(tabla_roles)) tabla_roles$Usuario <- tabla_roles$name
+    if ("comunidad" %in% names(tabla_roles) && !"Comunidad" %in% names(tabla_roles)) tabla_roles$Comunidad <- as.character(tabla_roles$comunidad)
+    
     df_integrado <- data_sentim |>
-      # Cruzamos con los temas (nos quedamos con los 700 que tienen tema)
       inner_join(df_temas, by = "comment_id") |> 
-      # Cruzamos con las métricas de red del autor
       left_join(tabla_roles, by = c("author" = "name")) |>
-      # Filtramos por si algún autor no estaba en la tabla de roles
       filter(!is.na(Rol))
     
-    if ("name" %in% names(tabla_roles) && !"Usuario" %in% names(tabla_roles)) {
-      tabla_roles$Usuario <- tabla_roles$name
-    }
-    if ("betweenness" %in% names(tabla_roles) && !"betweenness" %in% names(tabla_roles)) {
-      tabla_roles$betweenness <- tabla_roles$betweenness
-    }
-    if ("pagerank" %in% names(tabla_roles) && !"pagerank" %in% names(tabla_roles)) {
-      tabla_roles$pagerank <- tabla_roles$pagerank
-    }
-    if ("comunidad" %in% names(tabla_roles) && !"Comunidad" %in% names(tabla_roles)) {
-      tabla_roles$Comunidad <- as.character(tabla_roles$comunidad)
-    }
+    # 2. Detección automática de temas y comunidades
+    nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
+    nombres_temas_limpios <- gsub("\\s+", "_", nombres_temas_automaticos)
     
-    # df_integrado <- data_sentim |>
-    #   inner_join(df_temas, by = "comment_id") |>
-    #   left_join(tabla_roles, by = c("author" = "Usuario")) |>
-    #   filter(!is.na(.data$Rol))
+    num_comunidades <- max(as.numeric(df_integrado$comunidad), na.rm = TRUE)
+    comunidades_list <- as.character(1:num_comunidades)
     
     q1_influencia <- stats::quantile(df_integrado$pagerank, 0.25, na.rm = TRUE)
     q3_influencia <- stats::quantile(df_integrado$pagerank, 0.75, na.rm = TRUE)
@@ -529,68 +581,88 @@ server <- function(input, output, session) {
     q1_engagement <- stats::quantile(df_integrado$score, 0.25, na.rm = TRUE)
     q3_engagement <- stats::quantile(df_integrado$score, 0.75, na.rm = TRUE)
     
+    # 3. Creación DINÁMICA de columnas (Comunidades y Temas)
+    mutaciones_comunidades <- purrr::map_dfc(comunidades_list, ~{
+      col_name <- paste0("Autor_Comunidad_", .x)
+      tibble::tibble(!!col_name := ifelse(df_integrado$comunidad == .x, 1, 0))
+    })
+    
+    mutaciones_temas <- purrr::map_dfc(seq_along(nombres_temas_automaticos), ~{
+      tema_original <- nombres_temas_automaticos[.x]
+      tema_limpio <- nombres_temas_limpios[.x]
+      col_name <- paste0("Tema_", tema_limpio)
+      tibble::tibble(!!col_name := ifelse(df_integrado[[tema_original]] > 0.15, 1, 0))
+    })
+    
+    # Evaluamos las condiciones especiales fuera del mutate principal (para evitar errores en R)
+    valencia_act <- if (use_ia_data) df_integrado$valencia_ia else df_integrado$valencia
+    confianza_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Trust") else (df_integrado$trust > 0)
+    anticipacion_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Anticipation") else (df_integrado$anticipation > 0)
+    miedo_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Fear") else (df_integrado$fear > 0)
+    ira_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Anger") else (df_integrado$anger > 0)
+    alegria_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Joy") else (df_integrado$joy > 0)
+    tristeza_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Sadness") else (df_integrado$sadness > 0)
+    sorpresa_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Surprise") else (df_integrado$surprise > 0)
+    asco_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Disgust") else (df_integrado$disgust > 0)
+    
+    # 4. Construcción del Dataframe combinando base + bloques dinámicos
     df_fca <- df_integrado |>
       mutate(
-        Autor_Alta_Influencia = as.integer(.data$pagerank >= q3_influencia),
-        Autor_Media_Influencia = as.integer(.data$pagerank > q1_influencia & .data$pagerank < q3_influencia),
-        Autor_Baja_Influencia = as.integer(.data$pagerank <= q1_influencia),
-        Autor_Alto_Puente = as.integer(.data$betweenness >= q3_intermediacion),
-        Autor_Medio_Puente = as.integer(.data$betweenness > q1_intermediacion & .data$betweenness < q3_intermediacion),
-        Autor_Bajo_Puente = as.integer(.data$betweenness <= q1_intermediacion),
-        Autor_Comunidad_1 = as.integer(.data$comunidad == "1"),
-        Autor_Comunidad_2 = as.integer(.data$comunidad == "2"),
-        Autor_Comunidad_3 = as.integer(.data$comunidad == "3"),
-        Autor_Comunidad_4 = as.integer(.data$comunidad == "4"),
-        Autor_Comunidad_5 = as.integer(.data$comunidad == "5"),
-        Autor_Comunidad_6 = as.integer(.data$comunidad == "6"),
-        Autor_Comunidad_7 = as.integer(.data$comunidad == "7"),
-        Autor_Comunidad_8 = as.integer(.data$comunidad == "8"),
-        Autor_Rol_Regular = as.integer(.data$Rol == "Usuario Regular"),
-        Autor_Rol_Broker = as.integer(.data$Rol == "Broker (Conector)"),
-        Autor_Rol_Autoridad = as.integer(.data$Rol == "Autoridad (Referencia)"),
-        Autor_Rol_Hub = as.integer(.data$Rol == "Hub (Difusor activo)"),
-        Coment_Alto_Impacto = as.integer(.data$score >= q3_engagement),
-        Coment_Medio_Impacto = as.integer(.data$score > q1_engagement & .data$score < q3_engagement),
-        Coment_Bajo_Impacto = as.integer(.data$score <= q1_engagement),
-        Sent_Muy_Positivo = as.integer((if (use_ia_data) .data$valencia_ia else .data$valencia) >= 3),
-        Sent_Muy_Negativo = as.integer((if (use_ia_data) .data$valencia_ia else .data$valencia) <= -3),
-        Sent_Positivo = as.integer((if (use_ia_data) .data$valencia_ia else .data$valencia) >= 1 & (if (use_ia_data) .data$valencia_ia else .data$valencia) < 3),
-        Sent_Negativo = as.integer((if (use_ia_data) .data$valencia_ia else .data$valencia) <= -1 & (if (use_ia_data) .data$valencia_ia else .data$valencia) > -3),
-        Sent_Neutro = as.integer((if (use_ia_data) .data$valencia_ia else .data$valencia) > -1 & (if (use_ia_data) .data$valencia_ia else .data$valencia) < 1),
-        Emocion_Confianza = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Trust") else (.data$trust > 0)),
-        Emocion_Anticipacion = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Anticipation") else (.data$anticipation > 0)),
-        Emocion_Miedo = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Fear") else (.data$fear > 0)),
-        Emocion_Ira = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Anger") else (.data$anger > 0)),
-        Emocion_Alegria = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Joy") else (.data$joy > 0)),
-        Emocion_Tristeza = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Sadness") else (.data$sadness > 0)),
-        Emocion_Sorpresa = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Surprise") else (.data$surprise > 0)),
-        Emocion_Asco = as.integer(if (use_ia_data) (!is.na(.data$emocion_ia) & .data$emocion_ia == "Disgust") else (.data$disgust > 0)),
-        Tema_CryptocurrencyCriticism = as.integer(.data$`Cryptocurrency Criticism` > 0.15),
-        Tema_BlockchainTechnology = as.integer(.data$`Blockchain Technology` > 0.15),
-        Tema_InvestmentAndScams = as.integer(.data$`Investment and Scams` > 0.15),
-        Tema_PriceFluctuations = as.integer(.data$`Price Fluctuations` > 0.15),
-        Tema_CryptoExchangeMistakes = as.integer(.data$`Crypto Exchange Mistakes` > 0.15),
-        Tema_IllicitActivities = as.integer(.data$`Illicit Activities` > 0.15),
-        Tema_MarketAnalysis = as.integer(.data$`Market Analysis` > 0.15),
-        Tema_TechnologyIntegration = as.integer(.data$`Technology Integration` > 0.15)
-      )
+        Autor_Alta_Influencia  = ifelse(pagerank >= q3_influencia, 1, 0),
+        Autor_Media_Influencia = ifelse(pagerank > q1_influencia & pagerank < q3_influencia, 1, 0),
+        Autor_Baja_Influencia  = ifelse(pagerank <= q1_influencia, 1, 0),
+        
+        Autor_Alto_Puente  = ifelse(betweenness >= q3_intermediacion, 1, 0),
+        Autor_Medio_Puente = ifelse(betweenness > q1_intermediacion & betweenness < q3_intermediacion, 1, 0),
+        Autor_Bajo_Puente  = ifelse(betweenness <= q1_intermediacion, 1, 0),
+        
+        Autor_Rol_Regular = ifelse(Rol == "Usuario Regular", 1, 0),
+        Autor_Rol_Broker = ifelse(Rol == "Broker (Conector)", 1, 0),
+        Autor_Rol_Autoridad = ifelse(Rol == "Autoridad (Referencia)", 1, 0),
+        Autor_Rol_Hub = ifelse(Rol == "Hub (Difusor activo)", 1, 0),
+        
+        Coment_Alto_Impacto  = ifelse(score >= q3_engagement, 1, 0),
+        Coment_Medio_Impacto = ifelse(score > q1_engagement & score < q3_engagement, 1, 0),
+        Coment_Bajo_Impacto  = ifelse(score <= q1_engagement, 1, 0),
+        
+        Sent_Muy_Positivo = ifelse(valencia_act >= 3, 1, 0),
+        Sent_Muy_Negativo = ifelse(valencia_act <= -3, 1, 0),
+        Sent_Positivo     = ifelse(valencia_act >= 1 & valencia_act < 3, 1, 0),
+        Sent_Negativo     = ifelse(valencia_act <= -1 & valencia_act > -3, 1, 0),
+        Sent_Neutro       = ifelse(valencia_act > -1 & valencia_act < 1, 1, 0),
+        
+        Emocion_Confianza    = ifelse(confianza_act, 1, 0),
+        Emocion_Anticipacion = ifelse(anticipacion_act, 1, 0),
+        Emocion_Miedo        = ifelse(miedo_act, 1, 0),
+        Emocion_Ira          = ifelse(ira_act, 1, 0),
+        Emocion_Alegria      = ifelse(alegria_act, 1, 0),
+        Emocion_Tristeza     = ifelse(tristeza_act, 1, 0),
+        Emocion_Sorpresa     = ifelse(sorpresa_act, 1, 0),
+        Emocion_Asco         = ifelse(asco_act, 1, 0)
+      ) |>
+      bind_cols(mutaciones_comunidades) |>
+      bind_cols(mutaciones_temas)
+    
+    # 5. Selección final dinámica de columnas
+    nombres_comunidades <- paste0("Autor_Comunidad_", comunidades_list)
+    nombres_temas_atributos <- paste0("Tema_", nombres_temas_limpios)
+    
+    cols_a_seleccionar <- c(
+      "Autor_Alta_Influencia", "Autor_Media_Influencia", "Autor_Baja_Influencia",
+      "Autor_Alto_Puente", "Autor_Medio_Puente", "Autor_Bajo_Puente",
+      nombres_comunidades,
+      "Autor_Rol_Regular", "Autor_Rol_Broker", "Autor_Rol_Autoridad", "Autor_Rol_Hub",
+      "Coment_Alto_Impacto", "Coment_Medio_Impacto", "Coment_Bajo_Impacto",
+      "Sent_Muy_Positivo", "Sent_Muy_Negativo", "Sent_Positivo", "Sent_Negativo", "Sent_Neutro",
+      "Emocion_Confianza", "Emocion_Anticipacion", "Emocion_Miedo", "Emocion_Ira",
+      "Emocion_Alegria", "Emocion_Tristeza", "Emocion_Sorpresa", "Emocion_Asco",
+      nombres_temas_atributos
+    )
     
     matriz_fca_limpia <- df_fca |>
-      select(
-        Autor_Alta_Influencia, Autor_Media_Influencia, Autor_Baja_Influencia,
-        Autor_Alto_Puente, Autor_Medio_Puente, Autor_Bajo_Puente,
-        Autor_Comunidad_1, Autor_Comunidad_2, Autor_Comunidad_3,
-        Autor_Comunidad_4, Autor_Comunidad_5, Autor_Comunidad_6,
-        Autor_Rol_Regular, Autor_Rol_Broker, Autor_Rol_Autoridad, Autor_Rol_Hub,
-        Coment_Alto_Impacto, Coment_Medio_Impacto, Coment_Bajo_Impacto,
-        Sent_Muy_Positivo, Sent_Muy_Negativo, Sent_Positivo, Sent_Negativo, Sent_Neutro,
-        Emocion_Confianza, Emocion_Anticipacion, Emocion_Miedo, Emocion_Ira,
-        Emocion_Alegria, Emocion_Tristeza, Emocion_Sorpresa, Emocion_Asco,
-        Tema_CryptocurrencyCriticism, Tema_BlockchainTechnology, Tema_InvestmentAndScams,
-        Tema_PriceFluctuations, Tema_CryptoExchangeMistakes, Tema_IllicitActivities,
-        Tema_MarketAnalysis, Tema_TechnologyIntegration
-      )
+      select(all_of(cols_a_seleccionar))
     
+    # 6. Procesamiento FCA
     matriz_fca_final <- as.matrix(matriz_fca_limpia)
     
     resumen_atributos <- data.frame(
@@ -607,12 +679,10 @@ server <- function(input, output, session) {
     soportes <- fc$concepts$support()
     matriz_intensiones <- fc$concepts$intents()
     implicaciones <- capture.output(print(fc$implications))
-    nombres_atributos <- colnames(matriz_fca_final)
+    nombres_atributos_final <- colnames(matriz_fca_final)
     
-    intensiones_texto <- apply(matriz_intensiones, 2, function(columna) {
-      atributos_activos <- nombres_atributos[columna > 0]
-      paste(atributos_activos, collapse = " + ")
-    })
+    extraer_texto <- function(col) { paste(nombres_atributos_final[col > 0], collapse = ", ") }
+    intensiones_texto <- apply(matriz_intensiones, 2, extraer_texto)
     
     tabla_conceptos <- data.frame(
       ID_Concepto = seq_along(soportes),
@@ -655,8 +725,11 @@ server <- function(input, output, session) {
         title = "Atributos",
         value = "atributos",
         fluidRow(
-          column(7, plotlyOutput("fca_plot", height = 400)),
-          column(5, DT::dataTableOutput("fca_attr_table"))
+          # Le damos el ancho completo (12) al gráfico
+          column(12, plotlyOutput("fca_plot", height = 400)),
+          
+          # Le damos el ancho completo (12) a la tabla y añadimos un separador
+          column(12, tags$hr(), DT::dataTableOutput("fca_attr_table"))
         ),
         br(),
         uiOutput("fca_attr_details")
@@ -665,8 +738,11 @@ server <- function(input, output, session) {
         title = "Conceptos",
         value = "conceptos",
         fluidRow(
-          column(7, DT::dataTableOutput("fca_concepts_table")),
-          column(5, visNetworkOutput("fca_concepts_net", height = "500px"))
+          # Le damos todo el ancho a la red interactiva y la ponemos arriba
+          column(12, visNetworkOutput("fca_concepts_net", height = "500px")),
+          
+          # Ponemos la tabla debajo ocupando todo el ancho
+          column(12, tags$hr(), DT::dataTableOutput("fca_concepts_table"))
         )
       ),
       tabPanel(
@@ -861,8 +937,8 @@ server <- function(input, output, session) {
     })
     df <- do.call(rbind, df)
     
-    datatable(df, options = list(pageLength = 10, autoWidth = TRUE), rownames = FALSE)
-  })
+    # Cambia la última línea del bloque por esta:
+    datatable(df, options = list(pageLength = 5, autoWidth = TRUE, scrollX = TRUE), rownames = FALSE)  })
   
   output$fca_concepts_net <- renderVisNetwork({
     input$fca_run
@@ -956,6 +1032,8 @@ server <- function(input, output, session) {
     }
     
     visNetwork(nodes, edges) %>%
+      # Añadimos visEdges con smooth = FALSE para forzar las líneas rectas
+      visEdges(smooth = FALSE, color = list(highlight = "#FF7034")) %>% 
       visInteraction(dragNodes = TRUE, zoomView = TRUE) %>%
       visPhysics(enabled = FALSE) %>%
       visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
@@ -974,7 +1052,9 @@ server <- function(input, output, session) {
     validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
     
     dat <- res$resumen_atributos[order(-res$resumen_atributos$Porcentaje), ]
-    datatable(dat, options = list(pageLength = 15, autoWidth = TRUE), rownames = FALSE)
+    
+    # Añadimos scrollX = TRUE para evitar cortes en pantallas pequeñas
+    datatable(dat, options = list(pageLength = 5, autoWidth = TRUE, scrollX = TRUE), rownames = FALSE)
   })
   
   output$fca_attr_details <- renderUI({
@@ -1077,7 +1157,7 @@ server <- function(input, output, session) {
 
 # ===== HELPERS PARA INTERACTIVIDAD =====
   plotly_config <- function(widget) {
-    widget %>%
+    widget |>
       config(
         modeBarButtonsToAdd = list("zoomIn2d", "zoomOut2d", "select2d", "lasso2d"),
         displaylogo = FALSE,
