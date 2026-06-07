@@ -91,9 +91,7 @@ clean_data <- comentarios |>
   filter(author != "[deleted]" & author != "AutoModerator") |> 
   mutate(parent_id = if_else(str_detect(comment_id, "_"),
                              str_remove(comment_id, "_[0-9]+$"),
-                             NA_character_)) 
-
-
+                             NA_character_))
 ```
 
 Para hacer un análisis de texto (NLP) se usa la columna comment.

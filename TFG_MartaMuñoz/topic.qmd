@@ -47,13 +47,43 @@ data_texto <- readRDS("data/data_texto_procesado.rds")
 
 ```
 
-# Procesamiento de lenguaje natural (NLP) y construcción de DTM
+```{r}
+# ==============================================================================
+# FILTRADO INTELIGENTE DE ESCALABILIDAD (Big Data vs. Muestra)
+# ==============================================================================
+umbral_masivo <- 10000 # Consideramos "Big Data" si tiene más de 10k comentarios
+
+if (nrow(data_texto) > umbral_masivo) {
+  cat(sprintf("📈 Dataset masivo detectado (%d filas). Implementando arquitectura de filtrado élite...\n", nrow(data_texto)))
+  
+  # Cargamos la matriz de usuarios gatekeepers
+  data_texto <- readRDS("data/textos_elite_gatekeepers.rds")
+  
+  # Aseguramos compatibilidad de la nomenclatura de columnas para el resto del pipeline
+  if (!"comment" %in% colnames(data_texto) && "texto_procesado" %in% colnames(data_texto)) {
+    data_texto <- data_texto |> rename(comment = texto_procesado)
+  }
+  if (!"comment_id" %in% colnames(data_texto)) {
+    data_texto <- data_texto |> mutate(comment_id = row_number())
+  }
+  
+  cat(sprintf("✅ Pipeline restringido a %d comentarios estructurales de alta calidad.\n", nrow(data_texto)))
+  
+} else {
+  cat(sprintf("📊 Dataset de muestra detectado (%d filas). Utilizando todos los usuarios del foro...\n", nrow(data_texto)))
+}
+```
+
+
+
+# Procesamiento de lenguaje natural y construcción de DTM
 
 Se despliega un pipeline de limpieza morfológica y léxica. Incluye la tokenización, la eliminación de stopwords (estándar y del dominio específico) y la lematización. Para asegurar la calidad de la Matriz Documento-Término (DTM) dispersa, se aplica un filtro estadístico TF-IDF inicial que purga el ruido de fondo eliminando términos con una relevancia inferior a $0.01$.
 
 ```{r}
 stopwords_dominio <- tibble(
-  word = c("crypto", "bitcoin", "money", "people") # palabras "genéricas"
+  # word = c("crypto", "bitcoin", "money", "people") # palabras "genéricas"
+  word = c("")
 )
 # Tokenización y limpieza básica
 text_tokens <- data_texto |>
@@ -77,6 +107,10 @@ dtm_lda_limpio <- text_tfidf |>
 # Eliminar documentos vacíos
 row_totals <- apply(dtm_lda_limpio, 1, sum)
 dtm_lda_limpio <- dtm_lda_limpio[row_totals > 0, ]
+```
+
+
+```{r}
 ```
 
 
@@ -138,7 +172,7 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
   
   hilo_lda <- future::future({
     # Esto se ejecutará de forma invisible sin bloquear la consola
-    modelo <- LDA(dtm_lda_limpio, k = 8, control = list(seed = 123))
+    modelo <- LDA(dtm_lda_limpio, k = 6, control = list(seed = 123))
     saveRDS(modelo, "data/modelo_lda.rds")
     
     terminos_top <- terms(modelo, 8)
@@ -152,10 +186,10 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
     # 1.3 Prompt para nombrar temas
     prompt_unico <- paste(
       "You are an expert data analyst specializing in Reddit financial discussions.",
-      "Below are 8 groups of keywords extracted from a dataset via LDA topic modeling.",
+      "Below are 6 groups of keywords extracted from a dataset via LDA topic modeling.",
       "Your task is to assign a single, concise name (maximum 4 words) in ENGLISH to each topic.",
       "CRITICAL RULE: Each name must be completely UNIQUE and accurately distinguish one topic from another.",
-      "Respond ONLY with a flat numbered list from 1 to 8. Do not include introductory text, explanations, or conclusions.",
+      "Respond ONLY with a flat numbered list from 1 to 6. Do not include introductory text, explanations, or conclusions.",
       "Topics:",
       todos_los_temas_texto,
       sep = "\n"
@@ -177,7 +211,7 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
       trimws() |> 
       keep(~ .x != "")
     
-    nombres_temas <- setNames(nombres_ia, as.character(1:8))
+    nombres_temas <- setNames(nombres_ia, as.character(1:6))
     saveRDS(nombres_temas, ruta_nombres_lda) # Guardamos los nombres del LDA
     
     # Devolvemos una lista con el modelo y los nombres
@@ -277,7 +311,7 @@ if (file.exists(ruta_macro_temas)) {
   
   prompt_reduce <- paste(
     "You are a Lead Data Scientist.",
-    "CONSOLIDATE the following list into the TOP 8 MACRO-TOPICS of the entire dataset.",
+    "CONSOLIDATE the following list into the TOP 6 MACRO-TOPICS of the entire dataset.",
     "Do not explain the topics",
     "MANDATORY OUTPUT FORMAT (A clean bulleted list):",
     "- **[TOPIC NAME IN ENGLISH]**",
@@ -385,16 +419,22 @@ Se sustituye la clasificación determinista por una inferencia continua (Soft La
 
 ```{r}
 
-temas_ia_puro <- c("Cryptocurrency Criticism", 
-                   "Blockchain Technology", 
-                   "Investment and Scams", 
-                   "Price Fluctuations", 
-                   "Crypto Exchange Mistakes", 
-                   "Illicit Activities", 
-                   "Market Analysis", 
-                   "Technology Integration")
+# temas_ia_puro <- c("Cryptocurrency Criticism", 
+#                    "Blockchain Technology", 
+#                    "Investment and Scams", 
+#                    "Price Fluctuations", 
+#                    "Crypto Exchange Mistakes", 
+#                    "Illicit Activities", 
+#                    "Market Analysis", 
+#                    "Technology Integration")
+
+temas_ia_puro <- stringr::str_match_all(resultado_macro_temas, "\\*\\*(.*?)\\*\\*")[[1]][, 2]
+
+# Comprobamos el resultado
+print(temas_ia_puro)
 
 ruta_analisis_ia <- "data/datos_analisis_ia.rds"
+ruta_analisis_ia_backup <- "data/datos_analisis_ia_backup.rds"
 
 if (file.exists(ruta_analisis_ia)) {
   
@@ -403,9 +443,15 @@ if (file.exists(ruta_analisis_ia)) {
   
 } else {
 
-  set.seed(999)
-  datos_analisis_ia <- data_texto |> 
-    mutate(distribucion_ia = NA_character_)
+  if (file.exists(ruta_analisis_ia_backup)) {
+    cat("⚠️ Se ha encontrado un backup. Retomando la clasificación desde el último punto de guardado...\n")
+    datos_analisis_ia <- readRDS(ruta_analisis_ia_backup)
+  } else {
+    cat("Iniciando clasificación probabilística desde cero...\n")
+    set.seed(999)
+    datos_analisis_ia <- data_texto |> 
+      mutate(distribucion_ia = NA_character_)
+  }
   
   prompt_sistema <- paste(
     "You are an advanced probabilistic text classifier.",
@@ -424,6 +470,10 @@ if (file.exists(ruta_analisis_ia)) {
   )
   
   for (i in 1:nrow(datos_analisis_ia)) {
+    if (!is.na(datos_analisis_ia$distribucion_ia[i])) {
+      next
+    }
+    
     comentario_actual <- datos_analisis_ia$comment[i]
     
     if (is.na(comentario_actual) || nchar(comentario_actual) < 10) {
@@ -449,7 +499,10 @@ if (file.exists(ruta_analisis_ia)) {
     # Micro sleep to prevent local CPU choking, no network limits apply here
     Sys.sleep(0.05)
     
-    if (i %% 50 == 0) cat(sprintf("Procesados %d / %d documentos...\n", i, nrow(datos_analisis_ia)))
+    if (i %% 50 == 0) {
+      cat(sprintf("💾 Autoguardado de progreso local (Procesados %d / %d documentos)...\n", i, nrow(datos_analisis_ia)))
+      saveRDS(datos_analisis_ia, ruta_analisis_ia_backup)
+    }
   }
   
   # Filter out unmapped predictions or noise to clean data visualization steps
@@ -457,6 +510,11 @@ if (file.exists(ruta_analisis_ia)) {
     filter(!is.na(distribucion_ia))
   
   saveRDS(datos_analisis_ia, ruta_analisis_ia)
+  
+  # if (file.exists(ruta_analisis_ia_backup)) {
+  #   file.remove(ruta_analisis_ia_backup)
+  # }
+  
   cat("\n✅ Análisis probabilístico completado y guardado en disco.\n")
 }
 ```

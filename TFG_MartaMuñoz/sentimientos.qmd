@@ -109,8 +109,16 @@ vector_nrc <- as.character(textos_sentimiento$texto_sentimiento)
 attributes(vector_nrc) <- NULL
 
 # Para el Hilo 2 (Ollama)
-vector_ia <- as.character(data_texto$texto_limpio)
-attributes(vector_ia) <- NULL
+n_total <- nrow(data_texto)
+n_muestra <- min(n_total, 3000) # muestra de 3000 filas para no sobrecargar ollama
+
+set.seed(123)
+indices_aleatorios <- sample(1:n_total, size = n_muestra)
+
+textos_para_ia <- data_texto$texto_limpio[indices_aleatorios]
+attributes(textos_para_ia) <- NULL
+
+
 
 cat("🚀 Lanzando ambos motores en paralelo (cápsulas herméticas)...\n")
 
@@ -181,12 +189,16 @@ hilo_ia <- future({
   saveRDS(resultados_ia, path_final)
   message("🎉 [H2] ¡Procesamiento con Ollama finalizado!")
   
-  bind_rows(resultados_ia)
+  list(
+    indices = indices_ambientales,
+    resultados = bind_rows(resultados_ia)
+  )
   
 }, 
 globals = list(
-  textos_aislados_ia = vector_ia,
-  funcion_IA_aislada = analizar_con_ia
+  textos_aislados_ia = textos_para_ia,
+  funcion_IA_aislada = analizar_con_ia,
+  indices_ambientales = indices_aleatorios
 ), 
 # NOTA: Si analizar_con_ia usa httr2, jsonlite u otros, añádelos a este vector
 packages = c("dplyr", "tibble", "httr2", "jsonlite"))
@@ -197,24 +209,33 @@ packages = c("dplyr", "tibble", "httr2", "jsonlite"))
 # =========================================================================
 cat("⏳ Esperando a que ambos motores terminen su trabajo...\n")
 
-# La función value() pone R en pausa hasta que los hilos terminan y nos devuelve el resultado
+# 1. Recuperamos los resultados de los hilos
 sentimientos_raw <- value(hilo_nrc)
-datos_ia_df <- value(hilo_ia)
+datos_procesados_ia <- value(hilo_ia) # Esto contiene $indices y $resultados
 
-
-cat("🔄 Fusionando y calculando métricas finales...\n")
-
-# 2. Hacemos las sumas y uniones aquí fuera, donde `data_texto` SÍ existe
+# 2. Generamos el dataframe base con los datos léxicos (NRC)
+# Es mejor calcular valencia aquí antes de añadir los datos de IA
 data_con_sentim <- cbind(data_texto, sentimientos_raw) |>
   mutate(
     valencia = positive - negative
-    # log_score = log1p(score)
   )
 
+# 3. Preparamos el terreno para la IA (columnas con NA)
+data_comparativa <- data_con_sentim |>
+  mutate(
+    valencia_ia = NA_real_,
+    emocion_ia = NA_character_
+  )
 
-data_comparativa <- bind_cols(data_con_sentim, datos_ia_df)
+# 4. Reinsertamos la muestra aleatoria en las filas correctas
+indices <- datos_procesados_ia$indices
+resultados <- datos_procesados_ia$resultados
 
-cat("✅ ¡Procesamiento paralelo finalizado con éxito! Dataset comparativo listo.\n")
+data_comparativa$valencia_ia[indices] <- resultados$valencia_ia
+data_comparativa$emocion_ia[indices] <- resultados$emocion_ia
+
+cat("✅ ¡Procesamiento paralelo finalizado y resultados reinsertados correctamente!\n")
+
 ```
 
 
@@ -340,20 +361,48 @@ df_perfil_combinado <- bind_rows(df_nrc, df_ia)
 
 
 ```{r}
-plot_perfil_emocional_global <- ggplot(df_perfil_combinado, aes(x = reorder(emocion, valor), y = valor, fill = Modelo)) +
-  # position = "dodge" pone las barras una al lado de la otra en lugar de apilarlas
+# plot_perfil_emocional_global <- ggplot(df_perfil_combinado, aes(x = reorder(emocion, valor), y = valor, fill = Modelo)) +
+#   # position = "dodge" pone las barras una al lado de la otra en lugar de apilarlas
+#   geom_col(position = "dodge", alpha = 0.9) + 
+#   coord_flip() +
+#   # Usamos colores corporativos/académicos para distinguirlos bien
+#   scale_fill_manual(values = c("Clásico (NRC)" = "lightblue", "IA (Llama 3.1)" = "orange")) + 
+#   theme_minimal(base_size = 12) +
+#   labs(
+#     title = "Comparativa del Perfil Emocional: NRC vs. IA",
+#     subtitle = "Frecuencia absoluta de emociones detectadas en el corpus",
+#     x = NULL, 
+#     y = "Número de comentarios",
+#     fill = "Metodología",
+#     caption = "Fuente: Elaboración propia"
+#   ) +
+#   theme(
+#     legend.position = "top",
+#     panel.grid.minor = element_blank()
+#   )
+
+df_perfil_normalizado <- df_perfil_combinado |>
+  group_by(Modelo) |>
+  # Calculamos el porcentaje sobre el total de etiquetas de CADA modelo
+  mutate(porcentaje = (valor / sum(valor)) * 100) |>
+  ungroup()
+
+# 2. Renderizado del gráfico comparativo
+plot_perfil_emocional_global <- ggplot(df_perfil_normalizado, 
+                                       aes(x = reorder(emocion, porcentaje), 
+                                           y = porcentaje, 
+                                           fill = Modelo)) +
   geom_col(position = "dodge", alpha = 0.9) + 
   coord_flip() +
-  # Usamos colores corporativos/académicos para distinguirlos bien
   scale_fill_manual(values = c("Clásico (NRC)" = "lightblue", "IA (Llama 3.1)" = "orange")) + 
   theme_minimal(base_size = 12) +
   labs(
-    title = "Comparativa del Perfil Emocional: NRC vs. IA",
-    subtitle = "Frecuencia absoluta de emociones detectadas en el corpus",
+    # title = "Comparativa del Perfil Emocional: NRC vs. IA",
+    # subtitle = "Frecuencia relativa de emociones detectadas en el corpus",
     x = NULL, 
-    y = "Número de comentarios",
-    fill = "Metodología",
-    caption = "Fuente: Elaboración propia"
+    y = "Porcentaje de representación (%)",
+    # fill = "Metodología",
+    # caption = "Fuente: Elaboración propia"
   ) +
   theme(
     legend.position = "top",
@@ -447,6 +496,7 @@ data_temporal <- data_con_sentim |>
   group_by(fecha) |>
   summarise(valencia_diaria = mean(valencia, na.rm = TRUE)) |>
   # Calculamos media móvil de 7 días
+  
   mutate(media_movil = rollmean(valencia_diaria, k = 7, fill = NA, align = "right"))
 
 plot_evo_temp <- ggplot(data_temporal, aes(x = fecha)) +
@@ -518,11 +568,25 @@ Esta sección del análisis se orienta a la segmentación temática para entende
 
 ```{r}
 # Agrupamos por título de hilo (usando la URL o título corto)
+# comparativa_hilos <- data_con_sentim |>
+#   group_by(url,) |> # O el nombre corto que creamos antes
+#   summarise(across(c(trust, fear, joy, sadness, anger), mean))|>
+#   pivot_longer(cols = -url, names_to = "emocion", values_to = "media") |>
+#   filter(media !=0) 
+# 
+
+top_12_hilos <- data_con_sentim |>
+  count(url, sort = TRUE) |>
+  head(12) |>
+  pull(url)
+
+# 2. Filtramos la base de datos original y luego calculamos las medias
 comparativa_hilos <- data_con_sentim |>
-  group_by(url) |> # O el nombre corto que creamos antes
-  summarise(across(c(trust, fear, joy, sadness, anger), mean))|>
+  filter(url %in% top_12_hilos) |> 
+  group_by(url) |>
+  summarise(across(c(trust, fear, joy, sadness, anger), mean, na.rm = TRUE)) |>
   pivot_longer(cols = -url, names_to = "emocion", values_to = "media") |>
-  filter(media !=0) 
+  filter(media != 0)
 
 plot_micro_contextos <- ggplot(comparativa_hilos, aes(x = media, y = emocion, fill = emocion)) +
   geom_col() +
@@ -530,6 +594,7 @@ plot_micro_contextos <- ggplot(comparativa_hilos, aes(x = media, y = emocion, fi
   theme_minimal() +
   theme(legend.position = "none", strip.text = element_text(size = 7)) +
   labs(title = "Perfiles emocionales por hilo de discusión")
+
 
 print(plot_micro_contextos)
 
@@ -552,22 +617,24 @@ top_hilos <- unique(comparativa_hilos_ia$url)[1:15]
 
 plot_micro_contextos_ia <- comparativa_hilos_ia |>
   filter(url %in% top_hilos) |>
+  mutate(titulo_limpio = str_trunc(url, width = 45, side = "right", ellipsis = "...")) |>
   ggplot(aes(x = proporcion, y = emocion_ia, fill = emocion_ia)) +
   geom_col() +
-  facet_wrap(~url, scales = "free_y", labeller = label_wrap_gen(width = 40)) +
+  facet_wrap(~titulo_limpio, scales = "free_y", labeller = label_wrap_gen(width = 40)) +
   scale_x_continuous(labels = percent_format()) + # Mostramos en formato porcentaje
   theme_minimal() +
   theme(
     legend.position = "none",
     strip.text = element_text(size = 7),
     axis.text.x = element_text(size = 7)
-  ) +
-  labs(
-    title = "Clima Emocional por Hilo de Discusión (IA)",
-    subtitle = "Proporción de emociones dominantes detectadas por ia",
-    x = "Proporción del debate",
-    y = NULL
-  )
+  ) 
+# +
+#   labs(
+#     title = "Clima Emocional por Hilo de Discusión (IA)",
+#     subtitle = "Proporción de emociones dominantes detectadas por ia",
+#     x = "Proporción del debate",
+#     y = NULL
+#   )
 
 
 print(plot_micro_contextos_ia)

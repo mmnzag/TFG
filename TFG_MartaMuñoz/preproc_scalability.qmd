@@ -36,7 +36,19 @@ head(dataset_bruto)
 # Extraer una muestra aleatoria de 50.000 filas nada más cargar
 set.seed(123) # Garantiza que siempre extraigas los mismos 50.000 comentarios
 datos <- dataset_bruto |> 
-  slice_sample(n = 50000)
+  slice_sample(n = 50000) |>
+  mutate(date=created_time,
+         url = post_title,       # Usamos el título del post para agrupar (como hablamos antes)
+         author = author_name,
+         timestamp = created_time,
+         upvotes = ups,
+         downvotes = downs,
+         comment = self_text,
+        
+         # 2. Fabricamos las columnas que faltan en el nuevo dataset
+         # Rellenamos con NA (texto) o 0 (números) para que el código posterior no falle
+         golds = 0,
+         parent_id = NA_character_)
 
 saveRDS(datos, "data/data_sample.rds")
 ```
@@ -63,18 +75,16 @@ edges_co_participacion <- participaciones |>
   # Renombramos para que tidygraph y tu script de redes lo entiendan
   select(from = author_name.x, to = author_name.y)
 
-# datos_sna <- edges_co_participacion |>
-#   count(from, to, name = "weight")
+data_sna <- edges_co_participacion
 
-
-saveRDS(datos_sna, "data/data_sna.rds")
+saveRDS(data_sna, "data/data_sna.rds")
 ```
 
 
 # Preprocesamiento de texto y lematización
 
 ```{r}
-textos_sentimiento <- datos |>
+data_texto <- datos |>
   mutate(
     # Quitamos URLs
     texto_limpio = str_remove_all(self_text, "http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"),
@@ -87,6 +97,11 @@ textos_sentimiento <- datos |>
   ) |>
   filter(texto_limpio != "")
 
+saveRDS(data_texto, "data/data_texto_procesado.rds")
+
+textos_sentimiento <- data_texto |>
+  mutate(texto_sentimiento = texto_limpio) |>
+  select(-texto_limpio)
 
 saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
 ```
@@ -99,7 +114,7 @@ saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
 stop_words_en <- get_stopwords(language = "en")
 
 # 1. Tokenizamos y limpiamos a nivel de palabra
-tokens_limpios <- textos_sentimiento |>
+tokens_limpios <- data_texto |>
   unnest_tokens(word, texto_limpio) |>
   anti_join(stop_words_en, by = "word") |>
   filter(!str_detect(word, "^[0-9]+$")) |> # Eliminamos números sueltos

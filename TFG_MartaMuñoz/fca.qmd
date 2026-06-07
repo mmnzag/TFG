@@ -12,6 +12,9 @@
      highlight-style: dracula
 ---
 
+
+
+
 ```{r}
 library(tidyverse)
 library(stringr)
@@ -21,13 +24,10 @@ library(visNetwork)
 library(hassediagrams)
 library(hasseDiagram)
 library(httr2)
+library(rlang)
 
-# matriz_fca <- readRDS("data/matriz_fca.rds") 
-modelo_lda <- readRDS("data/modelo_lda.rds") 
 tabla_roles <- readRDS("data/tabla_roles.rds")
-data_texto <- readRDS("data/data_texto_procesado.rds")
 data_sentim <- readRDS("data/data_sentim_ia.rds")
-nombres_temas <- readRDS("data/nombres_temas.rds")
 df_temas <- readRDS("data/df_temas_ia.rds")
 
 ```
@@ -45,41 +45,59 @@ En esta fase, unificamos las tres dimensiones de nuestro análisis (modelado de 
 - Temas (LDA): Se asigna un 1 si la probabilidad de que el comentario pertenezca a un tema supera el 15%.
 
 ```{r}
-# 1. Extraer las probabilidades de temas (Gamma)
-# gamma_matrix <- modelo_lda@gamma
-# colnames(gamma_matrix) <- nombres_temas # "Market Trends", "Debt Crisis", etc.
-# 
-# df_temas <- as.data.frame(gamma_matrix)
-# # El slot @documents contiene los IDs (1, 10, 100...) que coinciden con comment_id
-# df_temas$comment_id <- modelo_lda@documents
-
-
 # 2. Unificar los tres datasets
+# ========== DETECCIÓN AUTOMÁTICA DE TEMAS Y COMUNIDADES ==========
+# Detectar automáticamente los nombres de los temas (excluyendo comment_id)
+nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
+
+# Crear nombres de atributos limpios para los temas (reemplazar espacios por guiones bajos)
+nombres_temas_limpios <- gsub("\\s+", "_", nombres_temas_automaticos)
+
 df_integrado <- data_sentim |>
   # Cruzamos con los temas (nos quedamos con los 700 que tienen tema)
-  inner_join(df_temas, by = "comment_id") |>
+  inner_join(df_temas, by = "comment_id") |> 
   # Cruzamos con las métricas de red del autor
   left_join(tabla_roles, by = c("author" = "name")) |>
   # Filtramos por si algún autor no estaba en la tabla de roles
   filter(!is.na(Rol))
+
+# Detectar automáticamente el número de comunidades
+num_comunidades <- max(as.numeric(df_integrado$comunidad), na.rm = TRUE)
+comunidades_list <- as.character(1:num_comunidades)
 ```
 
+
+Este es el bloque de transformación más crítico. Primero, se calculan los umbrales estadísticos (cuartiles Q1 y Q3) para segmentar las variables continuas de red (PageRank, intermediación e impacto) en categorías discretas (alto, medio, bajo). Mediante operaciones de mutación, se aplica One-Hot Encoding para convertir todas las variables (roles, comunidades, sentimientos, emociones primarias y temas) en atributos estrictamente binarios (1 o 0). Finalmente, el conjunto se purga dejando únicamente las columnas binarizadas y se transforma en una estructura de matriz matemática nativa, requisito indispensable para el análisis formal.
 
 ```{r}
 # 1. Calcular umbrales (Q1 = 25% más bajo, Q3 = 25% más alto)
 # Influencia (PageRank)
-q1_influencia <- quantile(df_integrado$PageRank, 0.25, na.rm = TRUE)
-q3_influencia <- quantile(df_integrado$PageRank, 0.75, na.rm = TRUE)
+q1_influencia <- quantile(df_integrado$pagerank, 0.25, na.rm = TRUE)
+q3_influencia <- quantile(df_integrado$pagerank, 0.75, na.rm = TRUE)
 
 # Intermediación (Puente)
-q1_intermediacion <- quantile(df_integrado$Intermediacion, 0.25, na.rm = TRUE)
-q3_intermediacion <- quantile(df_integrado$Intermediacion, 0.75, na.rm = TRUE)
+q1_intermediacion <- quantile(df_integrado$betweenness, 0.25, na.rm = TRUE)
+q3_intermediacion <- quantile(df_integrado$betweenness, 0.75, na.rm = TRUE)
 
 # Impacto (Score)
 q1_engagement <- quantile(df_integrado$score, 0.25, na.rm = TRUE)
 q3_engagement <- quantile(df_integrado$score, 0.75, na.rm = TRUE)
 
 # 2. Binarizar el dataframe con la nueva granularidad
+# Construir mutaciones de comunidades dinámicamente
+mutaciones_comunidades <- map_dfc(comunidades_list, ~{
+  col_name <- paste0("Autor_Comunidad_", .x)
+  tibble(!!col_name := as.integer(df_integrado$comunidad == .x))
+})
+
+# Construir mutaciones de temas dinámicamente
+mutaciones_temas <- map_dfc(seq_along(nombres_temas_automaticos), ~{
+  tema_original <- nombres_temas_automaticos[.x]
+  tema_limpio <- nombres_temas_limpios[.x]
+  col_name <- paste0("Tema_", tema_limpio)
+  tibble(!!col_name := as.integer(df_integrado[[tema_original]] > 0.15))
+})
+
 df_fca <- df_integrado |>
   mutate(
     # --- A. ATRIBUTOS DE RED (Autor) ---
@@ -93,17 +111,7 @@ df_fca <- df_integrado |>
     Autor_Medio_Puente = ifelse(betweenness > q1_intermediacion & betweenness < q3_intermediacion, 1, 0),
     Autor_Bajo_Puente  = ifelse(betweenness <= q1_intermediacion, 1, 0),
     
-    # Binarizar las comunidades
-    Autor_Comunidad_1 = ifelse(comunidad == "1", 1, 0),
-    Autor_Comunidad_2 = ifelse(comunidad == "2", 1, 0),
-    Autor_Comunidad_3 = ifelse(comunidad == "3", 1, 0),
-    Autor_Comunidad_4 = ifelse(comunidad == "4", 1, 0),
-    Autor_Comunidad_5 = ifelse(comunidad == "5", 1, 0),
-    Autor_Comunidad_6 = ifelse(comunidad == "6", 1, 0),
-    Autor_Comunidad_7 = ifelse(comunidad == "7", 1, 0),
-    Autor_Comunidad_8 = ifelse(comunidad == "8", 1, 0),
-
-    
+    # Roles
     Autor_Rol_Regular = ifelse(Rol == "Usuario Regular", 1, 0),
     Autor_Rol_Broker = ifelse(Rol == "Broker (Conector)", 1, 0),
     Autor_Rol_Autoridad = ifelse(Rol == "Autoridad (Referencia)", 1, 0),
@@ -130,45 +138,34 @@ df_fca <- df_integrado |>
     Emocion_Alegria      = ifelse(!is.na(emocion_ia) & emocion_ia == "Joy", 1, 0),
     Emocion_Tristeza     = ifelse(!is.na(emocion_ia) & emocion_ia == "Sadness", 1, 0),
     Emocion_Sorpresa     = ifelse(!is.na(emocion_ia) & emocion_ia == "Surprise", 1, 0),
-    Emocion_Asco         = ifelse(!is.na(emocion_ia) & emocion_ia == "Disgust", 1, 0),
-    
-    # --- C. ATRIBUTOS TEMÁTICOS (LDA) ---
-    # Nota: Para LDA es mejor mantener un umbral fijo (0.15) en lugar de cuartiles. 
-    # Al ser probabilidades dispersas, los cuartiles bajos suelen ser exactamente 0.
-    Tema_CryptoCriticism = ifelse(`Cryptocurrency Criticism` > 0.15, 1, 0),
-    Tema_BlockchainTech  = ifelse(`Blockchain Technology` > 0.15, 1, 0),
-    Tema_InvestScams     = ifelse(`Investment and Scams` > 0.15, 1, 0),
-    Tema_PriceFluct      = ifelse(`Price Fluctuations` > 0.15, 1, 0),
-    Tema_ExchangeMistake = ifelse(`Crypto Exchange Mistakes` > 0.15, 1, 0),
-    Tema_IllicitActivity = ifelse(`Illicit Activities` > 0.15, 1, 0),
-    Tema_MarketAnalysis  = ifelse(`Market Analysis` > 0.15, 1, 0),
-    Tema_TechIntegration = ifelse(`Technology Integration` > 0.15, 1, 0)
-  )
+    Emocion_Asco         = ifelse(!is.na(emocion_ia) & emocion_ia == "Disgust", 1, 0)
+  ) |>
+  bind_cols(mutaciones_comunidades) |>
+  bind_cols(mutaciones_temas)
 
-# 3. Limpiar la matriz final (Añadiendo las nuevas columnas)
+# 3. Limpiar la matriz final (Seleccionar dinámicamente: atributos base + comunidades generadas + temas generados)
+nombres_comunidades <- paste0("Autor_Comunidad_", comunidades_list)
+nombres_temas_atributos <- paste0("Tema_", nombres_temas_limpios)
+
+cols_a_seleccionar <- c(
+  "Autor_Alta_Influencia", "Autor_Media_Influencia", "Autor_Baja_Influencia",
+  "Autor_Alto_Puente", "Autor_Medio_Puente", "Autor_Bajo_Puente",
+  nombres_comunidades,
+  "Autor_Rol_Regular", "Autor_Rol_Broker", "Autor_Rol_Autoridad", "Autor_Rol_Hub",
+  "Coment_Alto_Impacto", "Coment_Medio_Impacto", "Coment_Bajo_Impacto",
+  "Sent_Muy_Positivo", "Sent_Muy_Negativo", "Sent_Positivo", "Sent_Negativo", "Sent_Neutro",
+  "Emocion_Confianza", "Emocion_Anticipacion", "Emocion_Miedo", "Emocion_Ira",
+  "Emocion_Alegria", "Emocion_Tristeza", "Emocion_Sorpresa", "Emocion_Asco",
+  nombres_temas_atributos
+)
+
 matriz_fca_limpia <- df_fca |>
-  select(
-    # Atributos de Autor (Actualizados con Media y Baja)
-    Autor_Alta_Influencia, Autor_Media_Influencia, Autor_Baja_Influencia, 
-    Autor_Alto_Puente, Autor_Medio_Puente, Autor_Bajo_Puente,
-    Autor_Comunidad_1, Autor_Comunidad_2, Autor_Comunidad_3, 
-    Autor_Comunidad_4, Autor_Comunidad_5, Autor_Comunidad_6,
-    Autor_Rol_Regular, Autor_Rol_Broker, Autor_Rol_Autoridad, Autor_Rol_Hub,
-    
-    # Atributos de Comentario/Sentimiento (Actualizados)
-    Coment_Alto_Impacto, Coment_Medio_Impacto, Coment_Bajo_Impacto,
-    Sent_Muy_Positivo, Sent_Muy_Negativo, Sent_Positivo, Sent_Negativo, Sent_Neutro,
-    Emocion_Confianza, Emocion_Anticipacion, Emocion_Miedo, Emocion_Ira, 
-    Emocion_Alegria, Emocion_Tristeza, Emocion_Sorpresa, Emocion_Asco,
-    
-    # Atributos de Temas
-    Tema_CryptoCriticism, Tema_BlockchainTech, Tema_InvestScams, Tema_PriceFluct, 
-    Tema_ExchangeMistake, Tema_IllicitActivity , Tema_MarketAnalysis, Tema_TechIntegration 
-    )
+  select(all_of(cols_a_seleccionar))
 
 # Asignar el comment_id como nombre de fila
 rownames(matriz_fca_limpia) <- make.unique(as.character(df_fca$comment_id))
 
+matriz_fca_limpia[is.na(matriz_fca_limpia)] <- 0
 # Convertir a matriz formal pura (0 y 1)
 matriz_fca_final <- as.matrix(matriz_fca_limpia)
 ```
@@ -176,7 +173,7 @@ matriz_fca_final <- as.matrix(matriz_fca_limpia)
 
 # Inicialización del contexto formal
 
-En esta celda inicializamos el motor matemático de FCA para extraer todas las estructuras subyacentes de la red. El algoritmo calcula dos elementos clave: los Conceptos Formales (grupos cerrados de usuarios y atributos) y las Implicaciones (reglas lógicas de causa y efecto del tipo $A \rightarrow B$).
+Este fragmento instancia el objeto FormalContext a partir de la matriz binaria. Ejecuta el método de clarificación para fusionar filas y columnas idénticas (reduciendo la carga computacional) y lanza los algoritmos de la familia NextClosure para extraer exhaustivamente tanto los conceptos formales (perfiles de atributos compartidos) como las implicaciones lógicas subyacentes
 ```{r}
 # Inicializar el Contexto Formal en fcaR
 fc <- FormalContext$new(matriz_fca_final)
@@ -191,6 +188,7 @@ fc$find_implications()
 ```
 
 # Cálculo de implicaciones e interpretación asistida por IA
+Se aplica un motor de deducción lógica sobre las reglas exactas extraídas previamente (Base Canónica de Duquenne-Guigues). Mediante reglas de equivalencia matemática (reducción, composición y generalización), el sistema elimina redundancias estructurales, comprimiendo el conjunto de implicaciones a su forma más compacta sin pérdida de información empírica.
 ```{r}
 # Ver las reglas generadas
 print(head(fc$implications))
@@ -212,14 +210,16 @@ Dado que el algoritmo puede generar miles de reglas matemáticas difíciles de i
 
 Filtro de Soporte: Nos quedamos únicamente con las reglas que tienen un soporte superior al 10% (0.1). Esto elimina el ruido estadístico y asegura que solo analizamos patrones de comportamiento masivo, no anécdotas aisladas.
 
-Traducción Semántica: Convertimos estas reglas lógicas a texto plano y las enviamos a un Modelo de Lenguaje (Llama 3 vía Groq). La IA actúa como un puente semántico, traduciendo la sintaxis formal a conclusiones legibles sobre psicología de masas y dinámicas de la red social.
+Traducción Semántica: Convertimos estas reglas lógicas a texto plano y las enviamos a un LLM. La IA actúa como un puente semántico, traduciendo la sintaxis formal a conclusiones legibles sobre dinámicas de la red social.
 
 ```{r}
 # 1. Extraer las reglas y filtrarlas
-indices <- which(fc$implications$support() > 0.05)
+indices <- which(fc$implications$support() > 0.1)
 
 # 2. Creamos el subconjunto de reglas usando esos índices
 reglas_filtradas <- fc$implications[indices]
+
+cat(length(indices)," implicaciones")
 
 # Convertir las reglas a un formato de texto legible
 texto_reglas <- capture.output(print(reglas_filtradas))
@@ -260,13 +260,13 @@ cat(interpretacion_fca_imp)
 ```
 
 
-
+Para garantizar la reproducibilidad del experimento y la auditabilidad de las inferencias generadas por el LLM, se implementó un módulo de persistencia de datos. El sistema captura la salida estructurada de la red neuronal y la serializa en documentos físicos de marcado ligero (Markdown), inyectando marcas de tiempo (timestamps) en la nomenclatura. Esta decisión arquitectónica asegura el aislamiento temporal de cada ejecución y facilita la posterior integración de las conclusiones en la capa de presentación del sistema.
 ```{r}
 # Guardar la respuesta en un archivo Markdown con la fecha
 fecha_actual <- format(Sys.time(), "%Y%m%d_%H%M")
 nombre_archivo <- paste0("data/Analisis_Implicaciones_IA_", fecha_actual, ".md")
 
-writeLines(interpretacion_fca, con = nombre_archivo)
+writeLines(interpretacion_fca_imp, con = nombre_archivo)
 cat("\n[INFO] El análisis se ha guardado correctamente en:", nombre_archivo, "\n")
 ```
 
@@ -274,31 +274,36 @@ cat("\n[INFO] El análisis se ha guardado correctamente en:", nombre_archivo, "\
 # Extracción de conceptos
 Una vez que el algoritmo matemático ha calculado el retículo, el siguiente paso es extraer los "Conceptos Formales". En nuestro caso de estudio, un concepto es básicamente un perfil de usuario: un grupo de personas que comparten exactamente el mismo conjunto de comportamientos, temas y emociones.
 
-Para que estos resultados sean interpretables, este bloque de código realiza una transformación de los datos en bruto:
+La extracción matemática del retículo de Galois devuelve un conjunto de estructuras formales cuya dimensionalidad dificulta su interpretación directa. Para solventar este obstáculo y preparar los datos para su explotación analítica, se diseñó un pipeline de transformación secuencial:
 
-1. Convierte el soporte matemático (un porcentaje) en el número real y absoluto de comentarios que pertenecen a ese grupo.
+Proyección probabilística: Conversión del soporte relativo de cada concepto formal a frecuencias absolutas, determinando la magnitud real de la subcultura analizada en el corpus de la red social.
 
-2. Traduce la matriz binaria interna de R en una cadena de texto legible (ej. "Alta Influencia + Emoción Miedo").
+Decodificación de intensiones: Traducción automatizada de la matriz binaria a descriptores semánticos legibles.
 
-3. Construye una tabla ordenada de mayor a menor tamaño para visualizar rápidamente cuáles son las dinámicas y subculturas más dominantes dentro de la red social analizada.
+Estructuración tabular: Agrupación y ordenación de los resultados en dataframes de alta cohesión. Esta estructura intermedia actúa como una capa de abstracción matemática, esencial para alimentar de forma eficiente tanto a la interfaz gráfica de usuario final como al motor de inferencia neuronal posterior.
 
 ```{r}
-# 1. Obtener el soporte (número de comentarios) de cada concepto
+# 1. Obtener el soporte (porcentaje matemático) de cada concepto
 soportes <- fc$concepts$support()
 
-# 2. Extraer las intensiones (los atributos que forman el concepto)
-# fc$concepts$intents() devuelve una matriz. Vamos a convertirla en texto legible.
-matriz_intensiones <- fc$concepts$intents()
+# 2. Extraer las intensiones (la matriz de 0 y 1)
+matriz_intensiones <- as.matrix(fc$concepts$intents())
+
+# ¡EL FIX! Cogemos los nombres directamente de tu matriz limpia original
+nombres_atributos <- colnames(matriz_fca_final)
+
+# Convertir la columna de 0 y 1 a texto legible
 intensiones_texto <- apply(matriz_intensiones, 2, function(columna) {
-  # Coge los nombres de los atributos que tienen un 1 en ese concepto
-  atributos_activos <- rownames(matriz_intensiones)[columna == 1]
+  # Cogemos los nombres de los atributos que tienen un 1 (o > 0)
+  atributos_activos <- nombres_atributos[columna > 0]
   paste(atributos_activos, collapse = " + ")
 })
 
 # 3. Construir el Dataframe definitivo para tu TFG
 tabla_conceptos <- data.frame(
   ID_Concepto = 1:length(soportes),
-  Num_Comentarios = soportes * nrow(matriz_fca_final), # Convertir porcentaje a número real
+  # ¡EL FIX! Usamos round() para no tener decimales en los comentarios
+  Num_Comentarios = round(soportes * nrow(matriz_fca_final)), 
   Atributos_Compartidos = intensiones_texto
 )
 
@@ -307,14 +312,13 @@ tabla_conceptos <- tabla_conceptos[order(-tabla_conceptos$Num_Comentarios), ]
 
 # 5. Echar un vistazo a los 10 perfiles más grandes
 head(tabla_conceptos, 10)
-
 ```
 
 
 
 ## Análisis exploratorio y visualización
 
-
+Se genera un resumen descriptivo del conjunto de datos calculando la frecuencia absoluta y el porcentaje de aparición de cada atributo individual dentro de la matriz de incidencia, permitiendo identificar rápidamente cuáles son los rasgos más comunes en la comunidad analizada.
 ```{r}
 # Sumamos las columnas para ver la frecuencia de cada atributo
 resumen_atributos <- data.frame(
@@ -328,6 +332,11 @@ resumen_atributos[order(resumen_atributos$Atributo),]
 
 ```
 
+
+
+## Visualización
+
+Para evitar la oclusión visual propia de matrices de alta dimensionalidad, se aísla un subconjunto específico de seis atributos críticos. A partir de este subcontexto, se recalcula el retículo y se invoca la función de ploteo para generar el diagrama de Hasse, suprimiendo las etiquetas de los objetos (comentarios) para obtener una representación gráfica limpia de la jerarquía de conceptos.
 ```{r}
 # --- VISUALIZACIÓN DEL RETÍCULO (Contexto Reducido) ---
 # Seleccionamos solo 6 atributos clave para que el gráfico sea legible en el TFG
@@ -420,7 +429,7 @@ prompt_ia_conceptos <- paste(
 # 2. Llamada a la API LOCAL de Ollama (Usando Qwen)
 respuesta_fca_conc <- request("http://localhost:11434/api/chat") |>
   req_body_json(list(
-    model = "qwen", # Nombre exacto del modelo local
+    model = "qwen2.5", # Nombre exacto del modelo local
     messages = list(list(role = "user", content = prompt_ia_conceptos)),
     stream = FALSE, # Recibir respuesta completa de una vez
     options = list(

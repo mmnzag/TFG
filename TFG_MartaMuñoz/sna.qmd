@@ -24,6 +24,7 @@ Se carga el dataset y se realiza una limpieza en el grado de actividad
 #| warning: false
 
 library(tidygraph)
+library(igraph)
 library(ggraph)
 library(tidyverse)
 library(viridis)
@@ -160,7 +161,7 @@ Se parametriza y ejecuta la función de subgrafiado avanzado fijando un criterio
 
 ```{r}
 #| warning: false
-umbral_nodos <- 10
+umbral_nodos <- 4
 umbral_aristas <- 1
 grafo_limpio <- generate_subgraph_advanced(umbral_nodos = umbral_nodos,
                                            umbral_aristas = umbral_aristas,
@@ -182,15 +183,7 @@ Antes de segmentar la red en comunidades, evaluamos su estructura global para en
 
 Aquí calcula de manera síncrona los indicadores macroscópicos que gobiernan la red depurada: densidad del grafo (ratio aristas reales/posibles), reciprocidad (proporción de aristas mutuamente dirigidas), transitividad global (coeficiente de agrupamiento que mide el cierre de tríadas de interconexión) y distancia media (longitud media del camino más corto entre pares de nodos, computada bajo dirección de aristas).
 ```{r}
-# metricas_globales <- data.frame(
-#   Métrica = c("Densidad", "Reciprocidad", "Transitividad", "Distancia Media"),
-#   Valor = c(
-#     edge_density(grafo_limpio),
-#     reciprocity(grafo_limpio),
-#     transitivity(grafo_limpio, type="global"),
-#     mean_distance(grafo_limpio, directed=TRUE)
-#   )
-# )
+
 metricas_globales <- data.frame(
   Métrica = c("Densidad", "Reciprocidad", "Transitividad Local (Promedio)", "Distancia Media"),
   Valor = c(
@@ -360,9 +353,8 @@ distribucion_comunidades <- bind_rows(dist_louvain, dist_walktrap)
 ggplot(distribucion_comunidades, aes(x = ranking, y = n, color = algoritmo)) +
   geom_line(size = 1) +
   geom_point(size = 2) +
-  geom_vline(xintercept = 4, linetype = "dashed", color = "steelblue", size = 0.8) +
-  geom_vline(xintercept = 5, linetype = "dashed", color = "darkorange", size = 0.8) +
   scale_color_manual(values = c("Louvain" = "steelblue", "Walktrap" = "darkorange")) +
+  coord_cartesian(xlim = c(1, 25)) +
   theme_minimal() +
   labs(
     title = "Criterio del Codo para la Selección de Macro-comunidades",
@@ -379,8 +371,8 @@ Este bloque consolida el análisis de clustering inyectando los vectores de pert
 grafo_limpio <- grafo_limpio |>
   activate(nodes) |>
   mutate(
-    community_louvain = fct_lump_n(as.factor(com_louvain), n =  7, other_level = "Periferia"),
-    community_walktrap = fct_lump_n(as.factor(com_walktrap), n = 7, other_level = "Periferia")
+    community_louvain = fct_lump_n(as.factor(com_louvain), n =  4, other_level = "Periferia"),
+    community_walktrap = fct_lump_n(as.factor(com_walktrap), n = 4, other_level = "Periferia")
   ) 
 
 plot_louvain <- plot_comunidades(graph = grafo_limpio, 
@@ -420,7 +412,7 @@ asort_grado <- grafo_limpio |>
 
 # Asortatividad ideológica por comunidad de Louvain
 asort_comun <- grafo_limpio |> 
-  with_graph(graph_assortativity(com_louvain))
+  with_graph(graph_assortativity(com_walktrap))
 
 cat("Asortatividad de Grado:", round(asort_grado, 4), "\n")
 cat("Asortatividad de Comunidad:", round(asort_comun, 4), "\n")
