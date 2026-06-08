@@ -98,6 +98,7 @@ ui <- dashboardPage(
               condition = "input.sna_grafico == 'interactive'",
               sliderInput("sna_umbral_nodos", "Umbral nodos (grado)", min = 0, max = 100, value = 10, step = 1),
               sliderInput("sna_umbral_aristas", "Umbral aristas (weight)", min = 1, max = 50, value = 1, step = 1),
+              checkboxInput("sna_highlight_roles", "Colorear por roles sociales", value = TRUE),
               numericInput("sna_seed", "Seed", value = 123, min = 1, step = 1),
               actionButton("sna_run", "Generar red", class = "btn-primary")
             )
@@ -421,16 +422,10 @@ server <- function(input, output, session) {
       g = g0
     )
     
-    nodes <- g1 |>
-      activate("nodes") |>
-      as_tibble()
-    
-    # Control de seguridad: Si los sliders filtran todo, avisamos al usuario
+    nodes <- g1 |> activate("nodes") |> as_tibble()
     validate(need(nrow(nodes) > 0, "El umbral es muy alto. No hay nodos para mostrar con estos filtros."))
     
-    if (!"Rol" %in% names(nodes)) {
-      nodes$Rol <- NA_character_
-    }
+    if (!"Rol" %in% names(nodes)) nodes$Rol <- NA_character_
     
     color_nodos <- if (isTRUE(input$sna_highlight_roles)) {
       purrr::map_chr(nodes$Rol, role_color)
@@ -443,11 +438,8 @@ server <- function(input, output, session) {
         id = name,
         label = ifelse(isTRUE(input$sna_show_labels), name, ""),
         title = paste0(
-          "<b>", name, "</b><br>",
-          "Grado: ", degree, "<br>",
-          "Betweenness: ", round(betweenness, 3), "<br>",
-          "Pagerank: ", round(pagerank, 4), "<br>",
-          "Rol: ", ifelse(is.na(Rol), "N/A", as.character(Rol))
+          "<b>", name, "</b><br>Grado: ", degree, "<br>Betweenness: ", round(betweenness, 3),
+          "<br>Pagerank: ", round(pagerank, 4), "<br>Rol: ", ifelse(is.na(Rol), "N/A", as.character(Rol))
         ),
         value = pmax(degree, 1),
         color = color_nodos
@@ -457,31 +449,21 @@ server <- function(input, output, session) {
       activate("edges") |>
       as_tibble() |>
       mutate(
-        # MAGIA AQUÍ: Mapeamos el índice numérico al nombre real del nodo
         from = nodes$id[from],
         to = nodes$id[to],
         title = paste0("Peso: ", weight, "<br>De: ", from, "<br>Para: ", to),
         width = pmax(weight / max(weight, 1) * 5, 1)
       )
     
-    # Forzamos que sean data.frames puros para evitar el error [object Object]
-    nodes <- as.data.frame(nodes)
-    edges <- as.data.frame(edges)
-    
     visNetwork(nodes, edges, height = "650px") |>
-      # 1. Calculamos el diseño en R y apagamos las físicas de rebote (red rígida)
-      visIgraphLayout(layout = "layout_with_fr") |> 
-      visNodes(shadow = list(enabled = TRUE, size = 20)) |>
-      # 2. smooth = FALSE hace que las líneas sean rectas y pierdan la curva elástica
+      # 1. SOLUCIÓN AL "BAILE": Forzamos la semilla para que los nodos siempre salgan en el mismo sitio
+      visIgraphLayout(layout = "layout_with_fr", randomSeed = input$sna_seed) |> 
+      visNodes(shadow = list(enabled = TRUE, size = 20), scaling = list(min = 30, max = 80)) |>
       visEdges(arrows = "to", smooth = FALSE, color = list(highlight = "#FF7034")) |>
-      visOptions(
-        highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE),
-        nodesIdSelection = list(enabled = TRUE, useLabels = TRUE)
-      ) |>
-      visInteraction(navigationButtons = TRUE, zoomView = TRUE) |>
-      visEvents(
-        selectNode = "function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('sna_node', event.nodes[0], {priority:'event'}); } }"
-      )
+      visOptions(highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE), nodesIdSelection = list(enabled = TRUE, useLabels = TRUE)) |>
+      visInteraction(navigationButtons = TRUE, zoomView = TRUE, dragNodes = TRUE) |>
+      # 2. SOLUCIÓN A LA IA: htmlwidgets::JS() obliga al navegador a reconocer el evento del clic
+      visEvents(selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('sna_node', event.nodes[0], {priority:'event'}); } }"))
   })
 
   output$sna_plot_static <- renderPlot({
@@ -489,6 +471,7 @@ server <- function(input, output, session) {
   })
 
   # Panel inteligente con detalles del nodo y explicación IA
+  # 1. Al hacer clic en un nodo: Solo guardamos sus datos y limpiamos la IA anterior
   observeEvent(input$sna_node, {
     req(input$sna_node)
     load_grafo_reddit()
@@ -498,33 +481,41 @@ server <- function(input, output, session) {
       as_tibble() |>
       filter(name == node_name) |>
       slice(1)
-    validate(need(nrow(node_data) == 1, "Nodo no encontrado."))
-
-    selected_sna_node(node_data)
-    selected_sna_node_explanation("Consultando Ollama...")
     
-    tiene_rol <- "Rol" %in% names(node_data)
-    role_label <- if (tiene_rol && !is.na(node_data[["Rol"]])) node_data[["Rol"]] else "N/A"
-
-    prompt <- glue(
-      "Eres un experto en análisis de redes sociales en Reddit.\n",
-      "Contexto: análisis SNA con métricas topológicas y roles de usuarios.\n",
-      "Nodo seleccionado: {node_data$name}\n",
-      "Métricas: Grado={node_data$degree}, Betweenness={round(node_data$betweenness,3)}, Pagerank={round(node_data$pagerank,4)}\n",
-      "Rol: {ifelse(is.na(node_data$Rol), 'N/A', node_data$Rol)}\n",
-      "Describe brevemente: 1) Su posición en la red, 2) Importancia estratégica, 3) Rol probable en la comunidad.\n",
-      "Sé conciso (3-5 líneas)."
-    )
-
-    selected_sna_node_explanation(explain_with_ollama(prompt))
+    validate(need(nrow(node_data) == 1, "Nodo no encontrado."))
+    
+    selected_sna_node(node_data)
+    selected_sna_node_explanation(NULL) # Reseteamos la explicación para que salga el botón
   }, ignoreNULL = TRUE)
-
+  
+  # 2. Renderizado de la tarjeta: Muestra las métricas y el botón (o la respuesta si ya la hay)
   output$sna_node_details <- renderUI({
     node <- selected_sna_node()
     explanation <- selected_sna_node_explanation()
     
     if (is.null(node)) {
-      return(helpText("Haz clic en un nodo para ver detalles y análisis IA."))
+      return(helpText("Haz clic en un nodo para ver sus métricas detalladas."))
+    }
+    
+    metricas_html <- paste0(
+      "<b>Métricas de red:</b><br>",
+      "• Grado (conexiones): ", node$degree, "<br>",
+      "• Betweenness (intermediación): ", round(node$betweenness, 3), "<br>",
+      "• Pagerank (influencia): ", round(node$pagerank, 4), "<br>",
+      "• Rol en la red: ", ifelse(is.na(node$Rol), "N/A", node$Rol), "<br>"
+    )
+    
+    # Si no hay explicación aún, mostramos el botón. Si la hay, mostramos el texto.
+    if (is.null(explanation)) {
+      seccion_ia <- tagList(
+        br(),
+        actionButton("sna_generate_ia_report", " Generar report IA", icon = icon("robot"), class = "btn-success btn-sm")
+      )
+    } else {
+      seccion_ia <- tagList(
+        tags$hr(),
+        HTML(paste0("<b>Análisis inteligente:</b><br>", explanation))
+      )
     }
     
     box(
@@ -532,17 +523,31 @@ server <- function(input, output, session) {
       status = "info",
       solidHeader = TRUE,
       width = NULL,
-      HTML(paste0(
-        "<b>Métricas de red:</b><br>",
-        "• Grado (conexiones): ", node$degree, "<br>",
-        "• Betweenness (intermediación): ", round(node$betweenness, 3), "<br>",
-        "• Pagerank (influencia): ", round(node$pagerank, 4), "<br>",
-        "• Rol en la red: ", ifelse(is.na(node$Rol), "N/A", node$Rol), "<br>",
-        "<hr>",
-        "<b>Análisis inteligente:</b><br>",
-        explanation
-      ))
+      HTML(metricas_html),
+      seccion_ia
     )
+  })
+  
+  # 3. Al hacer clic en "Generar report IA": Disparamos a Ollama con un prompt estricto
+  observeEvent(input$sna_generate_ia_report, {
+    node_data <- selected_sna_node()
+    req(node_data)
+    
+    # Mostramos una barra de progreso nativa de Shiny para que el usuario sepa que está cargando
+    withProgress(message = "Consultando a Ollama...", value = 0.5, {
+      # Prompt ajustado: Le pedimos máxima brevedad (1 o 2 frases)
+      prompt <- glue::glue(
+        "Eres un experto en análisis de redes sociales sobre conflictos geopolíticos.\n",
+        "Contexto: análisis SNA con métricas topológicas y roles de usuarios.\n",
+        "Nodo seleccionado: {node_data$name}\n",
+        "Métricas: Grado={node_data$degree}, Betweenness={round(node_data$betweenness,3)}, Pagerank={round(node_data$pagerank,4)}\n",
+        "Rol: {ifelse(is.na(node_data$Rol), 'N/A', node_data$Rol)}\n",
+        "Explica su importancia estratégica en la red. REGLA ESTRICTA: Tu respuesta debe tener como máximo 2 frases y ser extremadamente concisa."
+      )
+      
+      respuesta <- explain_with_ollama(prompt)
+      selected_sna_node_explanation(respuesta)
+    })
   })
   
   # --- FCA (fca.qmd) ---
@@ -732,7 +737,8 @@ server <- function(input, output, session) {
           column(12, tags$hr(), DT::dataTableOutput("fca_attr_table"))
         ),
         br(),
-        uiOutput("fca_attr_details")
+        uiOutput("fca_attr_details"),
+        DT::dataTableOutput("fca_attr_concepts_dt") # <-- ¡LO SACAMOS FUERA AQUÍ!
       ),
       tabPanel(
         title = "Conceptos",
@@ -800,26 +806,32 @@ server <- function(input, output, session) {
       row <- res$tabla_conceptos[res$tabla_conceptos$ID_Concepto == idx, ]
       if (nrow(row) == 0) return("Concepto no encontrado.")
       prompt_text <- paste(
-        "Eres un experto en análisis de redes sociales y minería de temas en Reddit.",
-        paste("El contexto FCA se construyó usando datos de", method_label, "."),
-        "Tienes un concepto formal que representa un grupo de comentarios con atributos compartidos.",
-        "Interpreta este concepto en español de forma breve y profesional. Explica qué perfil de usuarios o comportamientos describe,",
-        "qué significa en términos de sentimiento, temas y rol social, y por qué puede ser relevante.",
-        "Concepto:", row$Atributos_Compartidos,
-        sep = " \n"
+        "Eres un analista sociopolítico y experto en redes sociales especializado en conflictos geopolíticos.",
+        "Contexto: Estamos analizando un debate de Reddit sobre la guerra de Ucrania mediante Análisis Formal de Conceptos.",
+        "A continuación tienes los atributos exactos que comparten un grupo de comentarios (métricas de red, tópicos y emociones):",
+        row$Atributos_Compartidos,
+        "Interpreta qué representa este perfil en el contexto de la guerra. ¿Qué papel juegan en la narrativa, la propaganda o el flujo de información del conflicto?",
+        "REGLAS ESTRICTAS:",
+        "1. Prohibido hablar de 'marcas', 'empresas', 'clientes' o marketing.",
+        "2. Concéntrate en la sociología, la polarización y el impacto emocional del conflicto bélico.",
+        "3. Sé directo, académico y muy conciso (máximo 2 párrafos cortos).",
+        sep = "\n"
       )
     } else {
       idx <- as.integer(item)
       imp <- res$implicaciones
       if (idx < 1 || idx > length(imp)) return("Implicación no encontrada.")
       prompt_text <- paste(
-        "Eres un experto en lógica formal y análisis sociotécnico.",
-        paste("El contexto FCA se construyó usando datos de", method_label, "."),
-        "Tienes una implicación obtenida de un Análisis de Conceptos Formales (FCA) sobre datos de Reddit.",
-        "Interpreta esta implicación en español de forma breve y profesional.",
-        "Explica el significado social y la conexión entre los atributos.",
-        "Implicación:", imp[idx],
-        sep = " \n"
+        "Eres un analista sociopolítico y experto en redes sociales especializado en conflictos geopolíticos.",
+        "Contexto: Estamos analizando un debate de Reddit sobre la guerra de Ucrania usando reglas lógicas (FCA).",
+        "Interpreta la siguiente implicación lógica (Si los usuarios cumplen A -> Entonces cumplen B):",
+        imp[idx],
+        "¿Qué significado estratégico o sociológico tiene esta regla en la discusión sobre la guerra de Ucrania?",
+        "REGLAS ESTRICTAS:",
+        "1. Prohibido usar jerga de marketing o negocios.",
+        "2. Concéntrate en el comportamiento de las masas frente al conflicto.",
+        "3. Sé directo, académico y muy conciso (máximo 2 párrafos cortos).",
+        sep = "\n"
       )
     }
     
@@ -852,6 +864,8 @@ server <- function(input, output, session) {
     } else {
       tagList(
         h4("Interpretación IA"),
+        # MAGIA CSS: Obligamos al cajón gris a hacer saltos de línea
+        tags$style(HTML("#fca_ia_text { white-space: pre-wrap; word-wrap: break-word; }")),
         verbatimTextOutput("fca_ia_text")
       )
     }
@@ -888,7 +902,7 @@ server <- function(input, output, session) {
         axis.text = element_text(size = 10)
       ) +
       labs(
-        title = "Frecuencia de atributos en el contexto FCA",
+        title = "Frecuencia de atributos \n en el contexto FCA",
         subtitle = paste("Método:", ifelse(input$fca_metodo == "ia", "IA (Ollama)", "Clásico (NRC)")),
         x = NULL,
         y = "Porcentaje (%)"
@@ -963,7 +977,7 @@ server <- function(input, output, session) {
     topn <- as.integer(input$fca_top_n)
     if (length(ord) > topn) ord <- ord[1:topn]
     
-    # Crear nodos
+    # Nodos
     nodes <- data.frame(
       id = seq_along(ord),
       title = paste0("Concepto ", ord),
@@ -972,7 +986,7 @@ server <- function(input, output, session) {
       stringsAsFactors = FALSE
     )
     
-    # Crear aristas según similitud Jaccard entre intensiones
+    # Aristas
     sub_intents <- intents[, ord, drop = FALSE]
     k <- ncol(sub_intents)
     edges_list <- list()
@@ -984,137 +998,110 @@ server <- function(input, output, session) {
           inter <- sum(a & b)
           union <- sum(a | b)
           sim <- ifelse(union == 0, 0, inter / union)
-          if (sim > 0.15) {
-            edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2), title = paste0('sim=', round(sim, 2)))
+          if (sim > 0.20) {
+            # Evitamos bucles para que el algoritmo jerárquico no colapse
+            if (sum(a) < sum(b)) {
+              edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2))
+            } else if (sum(a) > sum(b)) {
+              edges_list[[length(edges_list) + 1]] <- data.frame(from = j, to = i, width = round(sim * 10, 2))
+            } else {
+              edges_list[[length(edges_list) + 1]] <- data.frame(from = min(i,j), to = max(i,j), width = round(sim * 10, 2))
+            }
           }
         }
       }
     }
-    if (length(edges_list) > 0) {
-      edges <- do.call(rbind, edges_list)
+    edges <- if (length(edges_list) > 0) do.call(rbind, edges_list) else data.frame(from = integer(0), to = integer(0), width = numeric(0))
+    
+    # Cálculo jerárquico forzando un espacio cuadrado (para evitar que se aplaste)
+    ig <- igraph::graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
+    if (igraph::vcount(ig) > 1) {
+      lay <- igraph::layout_with_sugiyama(ig)$layout
+      
+      # Normalizamos la X (anchura) para que ocupe todo el panel
+      rango_x <- max(lay[, 1]) - min(lay[, 1])
+      if (rango_x == 0) rango_x <- 1
+      nodes$x <- ((lay[, 1] - min(lay[, 1])) / rango_x) * 1000
+      
+      # Normalizamos la Y (altura) - ¡Esto arregla el aplastamiento!
+      rango_y <- max(lay[, 2]) - min(lay[, 2])
+      if (rango_y == 0) rango_y <- 1
+      nodes$y <- ((lay[, 2] - min(lay[, 2])) / rango_y) * 1000
     } else {
-      edges <- data.frame(from = integer(0), to = integer(0), width = numeric(0), title = character(0))
-    }
-    
-    # Reuse saved positions if available
-    saved_pos <- fca_net_positions()
-    if (!is.null(saved_pos) && length(saved_pos) > 0) {
-      xs <- sapply(nodes$id, function(i) {
-        key <- as.character(i)
-        if (!is.null(saved_pos[[key]])) saved_pos[[key]]$x else NA
-      })
-      ys <- sapply(nodes$id, function(i) {
-        key <- as.character(i)
-        if (!is.null(saved_pos[[key]])) saved_pos[[key]]$y else NA
-      })
-      if (!all(is.na(xs)) && !all(is.na(ys))) {
-        nodes$x <- xs
-        nodes$y <- ys
-      }
-    }
-    
-    # If positions not available, compute initial layout via igraph
-    if (!"x" %in% names(nodes) || any(is.na(nodes$x))) {
-      if (nrow(nodes) > 0 && nrow(edges) > 0) {
-        ig <- igraph::graph_from_data_frame(d = edges[, c("from", "to")], vertices = nodes, directed = FALSE)
-        if (igraph::vcount(ig) > 1) {
-          lay <- igraph::layout_with_fr(ig)
-          nodes$x <- lay[,1] * 100
-          nodes$y <- lay[,2] * 100
-        } else {
-          nodes$x <- rep(0, nrow(nodes))
-          nodes$y <- rep(0, nrow(nodes))
-        }
-      } else {
-        nodes$x <- rep(0, nrow(nodes))
-        nodes$y <- rep(0, nrow(nodes))
-      }
+      nodes$x <- 0
+      nodes$y <- 0
     }
     
     visNetwork(nodes, edges) %>%
-      # Añadimos visEdges con smooth = FALSE para forzar las líneas rectas
-      visEdges(smooth = FALSE, color = list(highlight = "#FF7034")) %>% 
+      visNodes(scaling = list(min = 20, max = 60)) %>% 
+      visEdges(arrows = "to", smooth = FALSE, color = list(highlight = "#FF7034")) %>% 
       visInteraction(dragNodes = TRUE, zoomView = TRUE) %>%
-      visPhysics(enabled = FALSE) %>%
-      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      visEvents(dragEnd = "function() { var pos = this.getPositions(); Shiny.setInputValue('fca_net_positions', pos, {priority:'event'}); }") %>%
-      visLegend()
-  })
-  
-  observeEvent(input$fca_net_positions, {
-    # store the latest positions from client-side dragEnd
-    fca_net_positions(input$fca_net_positions)
-  }, ignoreNULL = TRUE)
-  
-  output$fca_attr_table <- DT::renderDataTable({
-    input$fca_run
-    res <- fca_resultados()
-    validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
-    
-    dat <- res$resumen_atributos[order(-res$resumen_atributos$Porcentaje), ]
-    
-    # Añadimos scrollX = TRUE para evitar cortes en pantallas pequeñas
-    datatable(dat, options = list(pageLength = 5, autoWidth = TRUE, scrollX = TRUE), rownames = FALSE)
+      visPhysics(enabled = FALSE) %>% 
+      visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE)
   })
   
   output$fca_attr_details <- renderUI({
     input$fca_run
     attr_sel <- input$fca_attr_single_sel
     res <- fca_resultados()
-    if (is.null(res) || is.null(attr_sel) || attr_sel == "") return(helpText("Seleccione un atributo para ver detalles."))
     
-    intents <- as.matrix(res$concepts_intents)
-    nombres_atributos <- colnames(res$matriz)
-    # hallar índices de conceptos que contienen el atributo
-    attr_idx <- which(nombres_atributos == attr_sel)
-    if (length(attr_idx) == 0) return(helpText("Atributo no encontrado."))
+    if (is.null(res) || is.null(attr_sel) || attr_sel == "") {
+      return(helpText("Selecciona un atributo en el menú de la izquierda para ver en qué conceptos aparece."))
+    }
     
-    conceptos_idx <- which(intents[attr_idx, ] > 0)
-    if (length(conceptos_idx) == 0) return(helpText("Ningún concepto contiene este atributo."))
-    
-    n_comentarios <- nrow(res$matriz)
-    soportes_reales <- round(res$soportes * n_comentarios)
-    df <- data.frame(
-      ID_Concepto = conceptos_idx,
-      Num_Comentarios = soportes_reales[conceptos_idx],
-      Atributos = apply(intents[, conceptos_idx, drop = FALSE], 2, function(col) paste(nombres_atributos[col > 0], collapse = ", ")),
-      stringsAsFactors = FALSE
-    )
-    df <- df[order(-df$Num_Comentarios), , drop = FALSE]
+    fila_resumen <- res$resumen_atributos[res$resumen_atributos$Atributo == attr_sel, ]
     
     tagList(
-      h4(paste0("Atributo: ", attr_sel)),
-      p(paste0("Frecuencia: ", res$resumen_atributos$Frecuencia[res$resumen_atributos$Atributo == attr_sel],
-               " (", res$resumen_atributos$Porcentaje[res$resumen_atributos$Atributo == attr_sel], " %)")),
-      DT::dataTableOutput("fca_attr_concepts_dt"),
+      tags$hr(),
+      h4(paste("Conceptos que contienen el atributo:", attr_sel)),
+      p(paste0("Aparece en ", fila_resumen$Frecuencia, " comentarios (", fila_resumen$Porcentaje, "% del total).")),
       br()
     )
   })
   
   output$fca_attr_concepts_dt <- DT::renderDataTable({
     input$fca_run
-    input$fca_attr_single_sel
     res <- fca_resultados()
-    validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
     attr_sel <- input$fca_attr_single_sel
-    if (is.null(attr_sel) || attr_sel == "") return(datatable(data.frame(Message = "Seleccione un atributo"), options = list(dom = 't')))
+    
+    validate(need(!is.null(res), ""))
+    if (is.null(attr_sel) || attr_sel == "") return(datatable(data.frame(), options = list(dom = 't')))
     
     intents <- as.matrix(res$concepts_intents)
     nombres_atributos <- colnames(res$matriz)
     attr_idx <- which(nombres_atributos == attr_sel)
+    
+    if (length(attr_idx) == 0) return(datatable(data.frame(Mensaje = "Atributo no encontrado"), options = list(dom = 't')))
+    
     conceptos_idx <- which(intents[attr_idx, ] > 0)
-    if (length(conceptos_idx) == 0) return(datatable(data.frame(Message = "Ningún concepto contiene este atributo"), options = list(dom = 't')))
+    if (length(conceptos_idx) == 0) return(datatable(data.frame(Mensaje = "Ningún concepto contiene este atributo"), options = list(dom = 't')))
     
     n_comentarios <- nrow(res$matriz)
     soportes_reales <- round(res$soportes * n_comentarios)
+    
+    # Aplicar los filtros que el usuario ha marcado en la interfaz
+    min_attr <- as.integer(input$fca_min_attributes)
+    min_comments <- as.integer(input$fca_min_comments)
+    
+    valid_idx <- conceptos_idx[
+      colSums(intents[, conceptos_idx, drop = FALSE] > 0) >= min_attr &
+        soportes_reales[conceptos_idx] >= min_comments
+    ]
+    
+    if (length(valid_idx) == 0) {
+      return(datatable(data.frame(Mensaje = "Los conceptos con este atributo son demasiado pequeños y no superan tus filtros de 'Min atributos' o 'Min comentarios'."), options = list(dom = 't')))
+    }
+    
     df <- data.frame(
-      ID_Concepto = conceptos_idx,
-      Num_Comentarios = soportes_reales[conceptos_idx],
-      Atributos = apply(intents[, conceptos_idx, drop = FALSE], 2, function(col) paste(nombres_atributos[col > 0], collapse = ", ")),
+      ID_Concepto = valid_idx,
+      Num_Comentarios = soportes_reales[valid_idx],
+      Atributos = apply(intents[, valid_idx, drop = FALSE], 2, function(col) paste(nombres_atributos[col > 0], collapse = ", ")),
       stringsAsFactors = FALSE
     )
     df <- df[order(-df$Num_Comentarios), , drop = FALSE]
-    datatable(df, options = list(pageLength = 10), rownames = FALSE)
+    
+    # Añadimos scroll y lo limitamos a 5 filas para que no rompa la pantalla
+    datatable(df, options = list(pageLength = 5, autoWidth = TRUE, scrollX = TRUE), rownames = FALSE)
   })
   
   output$fca_download <- downloadHandler(
