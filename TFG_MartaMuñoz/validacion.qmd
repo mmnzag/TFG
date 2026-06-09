@@ -27,12 +27,28 @@ analizar_con_ia <- function(sentenceo) {
   url <- "http://localhost:11434/v1/chat/completions"
   
   prompt <- paste(
-    "Act as an expert in cryptocurrency sentiment analysis.",
-    "Analyze the following Reddit sentence and return ONLY a valid JSON object with one key:",
-    "1.'emocion_ia': You MUST choose EXACTLY ONE word from this list: [fear, sad, love, joy, suprise, anger].",
-    "STRICT RULE: Do not use any words outside that list. Output only the raw JSON format without markdown blocks or conversational sentence.",
-    "sentence to analyze:", sentenceo
-  )
+  "Act as an expert in cryptocurrency sentiment analysis.",
+  "You are analyzing Reddit content. Your task is to perform an emotional classification.",
+  
+  "### TAXONOMY:",
+  "Allowed emotions: [fear, sad, love, joy, surprise, anger].",
+  
+  "### INSTRUCTIONS:",
+  "1. Analyze the context of the sentence regarding cryptocurrency markets (e.g., understand 'HODL', 'moon', 'rekt', 'rug pull').",
+  "2. Reason briefly about the sentiment before selecting the emotion.",
+  "3. Return ONLY a valid JSON object with the following structure:",
+  "{",
+  "  \"reasoning\": \"Short 1-sentence explanation of the sentiment.\",",
+  "  \"emocion_ia\": \"One word from the taxonomy above.\"",
+  "}",
+  
+  "### EXAMPLES:",
+  "Sentence: 'Just bought more while it dips, HODL to the moon!' -> {\"reasoning\": \"The user expresses optimism and loyalty to the asset during a price drop.\", \"emocion_ia\": \"joy\"}",
+  "Sentence: 'I lost my life savings in this scam, I am devastated.' -> {\"reasoning\": \"The user shows profound pain due to financial loss.\", \"emocion_ia\": \"sad\"}",
+  
+  "### INPUT:",
+  "Sentence to analyze:", sentenceo
+)
   
   cuerpo_peticion <- list(
     model = "llama3.1", # Asegúrate de que coincide con el que tienes en Ollama
@@ -72,9 +88,8 @@ Muestreo reproducible del dataset original mediante la fijación de semilla (set
 
 ```{r}
 # 1. FIJAMOS LA SEMILLA. 
-# Esto garantiza que las 2000 filas aleatorias sean SIEMPRE las mismas.
 set.seed(42) 
-datos <- datos_val |> sample_n(size = 500)
+datos <- datos_val |> sample_n(size = 300)
 
 resultados_ia <- list()
 
@@ -205,5 +220,60 @@ cat("==============================================================\n")
 
 # Si quieres ver las métricas detalladas por cada emoción (Sensibilidad, Especificidad, F1-Score):
 print(metricas_por_clase[, c("Sensitivity", "Specificity", "F1")])
+```
+
+```{r}
+library(kableExtra)
+# 1. Filtramos las filas donde la predicción NO coincide con la etiqueta real
+# (También eliminamos filas con NA para que no entorpezcan el análisis)
+discrepancias <- datos_validacion |>
+  filter(emocion_ia != emotion) |>
+  select(sentence, emotion, emocion_ia) |>
+  arrange(emotion) # Ordenamos por emoción real para ver patrones de error
+
+# 2. Mostramos el resultado
+# Usamos 'head' para ver las primeras 20, pero puedes imprimir todo el objeto
+print(paste("Se han encontrado", nrow(discrepancias), "casos de discrepancia."))
+
+# Visualización amigable (puedes ver esto en el visor de RStudio)
+discrepancias |>
+  knitr::kable(caption = "Ejemplos de discrepancia: Dataset vs IA") |>
+  kable_styling()
+```
+
+
+```{r}
+library(kableExtra)
+
+# Definimos el orden de las emociones según su polaridad
+# Esto nos ayuda a saber qué tan lejos está una emoción de otra
+orden_emociones <- c("fear", "sad", "anger", "surprise", "love", "joy")
+
+# Función para calcular la "distancia" (gravedad)
+calcular_gravedad <- function(real, ia) {
+  idx_real <- match(real, orden_emociones)
+  idx_ia <- match(ia, orden_emociones)
+  distancia <- abs(idx_real - idx_ia)
+  return(distancia)
+}
+
+# Aplicamos la gravedad a tus discrepancias
+discrepancias <- discrepancias |>
+  mutate(gravedad = calcular_gravedad(emotion, emocion_ia))
+
+discrepancias |>
+  mutate(
+    # Aplicamos colores: Rojo intenso para discrepancias extremas, amarillo para leves
+    emocion_ia = cell_spec(emocion_ia, color = "white", bold = TRUE,
+                           background = case_when(
+                             gravedad >= 4 ~ "#c0392b", # Rojo oscuro (discrepancia grave)
+                             gravedad >= 2 ~ "#FFB540", # Naranja (discrepancia media)
+                             TRUE          ~ "#E3DD5D"  # Amarillo (discrepancia leve)
+                           ))
+  ) |>
+  arrange(desc(gravedad)) |>
+  select(-gravedad) |> # Ocultamos la columna técnica
+  knitr::kable(format = "html",escape = FALSE, caption = "Análisis de Gravedad de Discrepancias") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
