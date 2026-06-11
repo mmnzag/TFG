@@ -1,5 +1,5 @@
 ---
-title: "Análisis de Redes Sociales (SNA)"
+title: "Análisis de redes sociales"
 subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
 author: "Marta Muñoz Aguilar"
 date: "`r Sys.Date()`"
@@ -9,7 +9,6 @@ format:
     toc-depth: 3
     code-fold: show
     theme: cosmo
-    highlight-style: dracula
 execute:
   warning: false
   message: false
@@ -31,9 +30,23 @@ library(viridis)
 library(scales) # escalado de datos
 
 
-# Carga del dataset preprocesado
-data_sna <- readRDS("data/data_sna.rds") 
-data_texto <- readRDS("data/data_sample.rds")
+# Selector de fuente de datos ("reddit" o "kaggle")
+fuente_activa <- "kaggle" 
+
+# Construcción dinámica de la ruta
+ruta_data_sna <- paste0("data/", fuente_activa, "/data_sna.rds")
+
+# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+data_sna <- readRDS(ruta_data_sna)
+
+if (fuente_activa == "reddit") {
+  ruta_data_texto <- paste0("data/", fuente_activa, "/data_texto_procesado.rds")
+  data_texto <- readRDS(ruta_data_texto) |> 
+    rename(author_name = author, self_text = comment)
+} else {
+  ruta_data_texto <- paste0("data/", fuente_activa, "/data_sample.rds")
+  data_texto <- readRDS(ruta_data_texto)
+}
 
 
 ```
@@ -441,7 +454,7 @@ tabla_roles <- grafo_limpio |>
   mutate(comunidad = community_walktrap)
 print(tabla_roles)
 
-saveRDS(tabla_roles, "data/tabla_roles.rds")
+saveRDS(tabla_roles, paste0("data/", fuente_activa, "/tabla_roles.rds"))
 
 ```
 
@@ -547,7 +560,7 @@ textos_limpios <- textos_elite |>
   ) |>
   filter(texto_procesado != "" & !is.na(texto_procesado))
 
-saveRDS(textos_limpios, "data/textos_elite_gatekeepers.rds")
+saveRDS(textos_limpios, paste0("data/", fuente_activa, "/textos_elite_gatekeepers.rds"))
 cat("¡Embudo completado! Te han quedado", nrow(textos_limpios), "comentarios clave escritos por la élite de la red.\n")
 ```
 

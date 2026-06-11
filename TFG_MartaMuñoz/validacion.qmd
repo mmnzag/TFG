@@ -1,6 +1,17 @@
 ---
-title: "validacion"
-format: html
+title: "Validación del uso de IA"
+subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
+author: "Marta Muñoz Aguilar"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+execute:
+  warning: false
+  message: false
 ---
 
 # Configuración inicial y dependencias

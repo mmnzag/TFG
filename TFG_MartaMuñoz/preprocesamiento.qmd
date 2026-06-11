@@ -9,7 +9,6 @@
      toc-depth: 3
      code-fold: show
      theme: cosmo
-     highlight-style: dracula
 ---
 
 # Configuración y carga de datos
@@ -26,7 +25,10 @@ library(textstem) # Para lematización
 Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología.
 
 ```{r}
-archivo_datos <- "data/reddit_thread_crypto.rds"
+# Asegurar que el directorio de salida existe
+dir.create("data/reddit", recursive = TRUE, showWarnings = FALSE)
+
+archivo_datos <- "data/reddit/reddit_thread_crypto.rds"
 
 if (file.exists(archivo_datos)) {
   # Si ya lo descargamos antes, lo cargamos del disco
@@ -69,7 +71,7 @@ Se descargan los comentarios de los hilos y su contenido
 
 ```{r}
 # Descarga de contenido
-path_comentarios <- "data/reddit_comments.rds"
+path_comentarios <- "data/reddit/reddit_comments.rds"
 if (file.exists(path_comentarios)) {
   contenido <- readRDS(path_comentarios)
   message("--- ARCHIVO ENCONTRADO: Cargando datos locales---")
@@ -126,7 +128,7 @@ data_sna <- clean_data |>
   filter(from != to) # se quitan autorespuestas
 
 
-saveRDS(data_sna, "data/data_sna.rds")
+saveRDS(data_sna, "data/reddit/data_sna.rds")
 ```
 
 # Preprocesamiento de texto y lematización
@@ -142,7 +144,7 @@ data_texto <- clean_data |>
            str_to_lower() |>                                # Minúsculas
            lemmatize_strings())                             # Lematizar (textstem)
 
-saveRDS(data_texto, "data/data_texto_procesado.rds")
+saveRDS(data_texto, "data/reddit/data_texto_procesado.rds")
 ```
 
 - **Normalizado:** Creación de un Corpus y una Matriz Documento-Término (DTM) filtrando términos de baja frecuencia (dispersión \< 99%) para el modelado de temas (LDA).
@@ -176,7 +178,7 @@ filas_con_palabras <- rowSums(as.matrix(dtm_reducida)) > 0
 dtm_lda <- dtm_reducida[filas_con_palabras, ]
 
 
-saveRDS(dtm_lda, "data/dtm_lda.rds")
+saveRDS(dtm_lda, "data/reddit/dtm_lda.rds")
 ```
 
 - `textos_sentimiento`: Texto con limpieza ligera para preservar la carga emocional necesaria en el análisis de sentimientos.
@@ -189,5 +191,5 @@ textos_sentimiento <- clean_data |>
          texto_sentimiento = str_squish(texto_sentimiento)) # Solo quitar espacios extra
 
 
-saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
+saveRDS(textos_sentimiento, "data/reddit/textos_sentimiento.rds")
 ```

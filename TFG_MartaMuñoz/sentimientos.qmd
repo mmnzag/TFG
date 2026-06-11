@@ -9,7 +9,6 @@ format:
     toc-depth: 3
     code-fold: show
     theme: cosmo
-    highlight-style: dracula
 execute:
   warning: false
   message: false
@@ -35,9 +34,18 @@ library(igraph)
 # Activamos el motor paralelo
 plan(multisession, workers = 12)
 
-textos_sentimiento <- readRDS("data/textos_sentimiento.rds") 
-data_texto <- readRDS("data/data_texto_procesado.rds")
-tabla_roles <- readRDS("data/tabla_roles.rds")
+# Selector de fuente de datos ("reddit" o "kaggle")
+fuente_activa <- "kaggle" 
+
+# Construcción dinámica de la ruta
+ruta_textos_sentimiento <- paste0("data/", fuente_activa, "/textos_sentimiento.rds")
+ruta_data_texto <- paste0("data/", fuente_activa, "/data_texto_procesado.rds")
+ruta_tabla_roles <- paste0("data/", fuente_activa, "/tabla_roles.rds")
+
+# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+textos_sentimiento <- readRDS(ruta_textos_sentimiento)
+data_texto <- readRDS(ruta_data_texto)
+tabla_roles <- readRDS(ruta_tabla_roles)
 
 ```
 
@@ -145,8 +153,8 @@ hilo_ia <- future({
   message("-> [HILO 2] Iniciando inferencia con LLM en localhost...")
   
   resultados_ia <- list()
-  path_final <- "data/resultados_ia_final.rds"
-  path_backup <- "data/resultados_ia_backup.rds"
+  path_final <- paste0("data/", fuente_activa, "/resultados_ia_final.rds")
+  path_backup <- paste0("data/", fuente_activa, "/resultados_ia_backup.rds")
   
   if (file.exists(path_final)) {
     resultados_ia <- readRDS(path_final)
@@ -198,7 +206,8 @@ hilo_ia <- future({
 globals = list(
   textos_aislados_ia = textos_para_ia,
   funcion_IA_aislada = analizar_con_ia,
-  indices_ambientales = indices_aleatorios
+  indices_ambientales = indices_aleatorios,
+  fuente_activa = fuente_activa
 ), 
 # NOTA: Si analizar_con_ia usa httr2, jsonlite u otros, añádelos a este vector
 packages = c("dplyr", "tibble", "httr2", "jsonlite"))
@@ -285,11 +294,9 @@ print(unique(data_comparativa$emocion_ia))
 data_fca_export <- data_comparativa |>
   select(-texto_ia) # texto_ia era solo para facilitar el regex
 
-# 2. Guardamos el objeto en la carpeta data
-# Le ponemos un nombre nuevo para no machacar el data_sentim original
-saveRDS(data_fca_export, file = "data/data_sentim_ia.rds")
+saveRDS(data_fca_export, file = paste0("data/", fuente_activa, "/data_sentim_ia.rds"))
 
-cat("\n[INFO] Dataset final guardado con éxito en 'data/data_sentim_ia.rds'.\n")
+cat("\n[INFO] Dataset final guardado con éxito.\n")
 cat("[INFO] Listo para ser cargado en el script de Análisis de Conceptos Formales.\n")
 ```
 
@@ -449,7 +456,7 @@ print(plot_relacion_sentimiento_popularidad)
 ggsave("images/sa_plot_relacion_sentimiento_popularidad.png", plot_relacion_sentimiento_popularidad, dpi = 300)
 
 
-saveRDS(data_con_sentim, "data/data_sentim.rds")
+saveRDS(data_con_sentim, paste0("data/", fuente_activa, "/data_sentim.rds"))
 
 ```
 

@@ -9,7 +9,6 @@
      toc-depth: 3
      code-fold: show
      theme: cosmo
-     highlight-style: dracula
 ---
 
 
@@ -26,9 +25,18 @@ library(hasseDiagram)
 library(httr2)
 library(rlang)
 
-tabla_roles <- readRDS("data/tabla_roles.rds")
-data_sentim <- readRDS("data/data_sentim_ia.rds")
-df_temas <- readRDS("data/df_temas_ia.rds")
+# Selector de fuente de datos ("reddit" o "kaggle")
+fuente_activa <- "kaggle" 
+
+# Construcción dinámica de la ruta
+ruta_tabla_roles <- paste0("data/", fuente_activa, "/tabla_roles.rds")
+ruta_data_sentim <- paste0("data/", fuente_activa, "/data_sentim_ia.rds")
+ruta_df_temas <- paste0("data/", fuente_activa, "/df_temas_ia.rds")
+
+# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+tabla_roles <- readRDS(ruta_tabla_roles)
+data_sentim <- readRDS(ruta_data_sentim)
+df_temas <- readRDS(ruta_df_temas)
 
 ```
 

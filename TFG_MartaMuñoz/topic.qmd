@@ -9,7 +9,6 @@ format:
     toc-depth: 3
     code-fold: show
     theme: cosmo
-    highlight-style: dracula
 execute:
   warning: false
   message: false
@@ -42,8 +41,16 @@ library(jsonlite)
 
 plan(multisession, workers = 12)
 
-dtm_lda <- readRDS("data/dtm_lda.rds") 
-data_texto <- readRDS("data/data_texto_procesado.rds")
+# Selector de fuente de datos ("reddit" o "kaggle")
+fuente_activa <- "kaggle" 
+
+# Construcción dinámica de la ruta
+ruta_dtm_lda <- paste0("data/", fuente_activa, "/dtm_lda.rds")
+ruta_data_texto <- paste0("data/", fuente_activa, "/data_texto_procesado.rds")
+
+# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+dtm_lda <- readRDS(ruta_dtm_lda)
+data_texto <- readRDS(ruta_data_texto)
 
 ```
 
@@ -57,7 +64,8 @@ if (nrow(data_texto) > umbral_masivo) {
   cat(sprintf("📈 Dataset masivo detectado (%d filas). Implementando arquitectura de filtrado élite...\n", nrow(data_texto)))
   
   # Cargamos la matriz de usuarios gatekeepers
-  data_texto <- readRDS("data/textos_elite_gatekeepers.rds")
+  ruta_textos_elite <- paste0("data/", fuente_activa, "/textos_elite_gatekeepers.rds")
+  data_texto <- readRDS(ruta_textos_elite)
   
   # Aseguramos compatibilidad de la nomenclatura de columnas para el resto del pipeline
   if (!"comment" %in% colnames(data_texto) && "texto_procesado" %in% colnames(data_texto)) {
@@ -153,9 +161,9 @@ Se implementa un patrón de concurrencia avanzada. En el hilo primario (fondo), 
 
 
 ```{r}
-ruta_lda <- "data/modelo_lda.rds"
-ruta_nombres_lda <- "data/nombres_temas.rds"
-ruta_micro_temas <- "data/micro_temas_map.rds"
+ruta_lda <- paste0("data/", fuente_activa, "/modelo_lda.rds")
+ruta_nombres_lda <- paste0("data/", fuente_activa, "/nombres_temas.rds")
+ruta_micro_temas <- paste0("data/", fuente_activa, "/micro_temas_map.rds")
 
 if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_micro_temas)) {
   
@@ -173,7 +181,7 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
   hilo_lda <- future::future({
     # Esto se ejecutará de forma invisible sin bloquear la consola
     modelo <- LDA(dtm_lda_limpio, k = 6, control = list(seed = 123))
-    saveRDS(modelo, "data/modelo_lda.rds")
+    saveRDS(modelo, ruta_lda)
     
     terminos_top <- terms(modelo, 8)
     todos_los_temas_texto <- paste(
@@ -296,7 +304,7 @@ Se ejecuta la fase final del patrón Map-Reduce. Agrega la matriz de micro-temas
 # 3. FASE REDUCE: Síntesis final de Ollama
 # ==============================================================================
 
-ruta_macro_temas <- "data/temas_ia_puro.rds"
+ruta_macro_temas <- paste0("data/", fuente_activa, "/temas_ia_puro.rds")
 if (file.exists(ruta_macro_temas)) {
   
   cat("✅ Fichero encontrado. Cargando Fase REDUCE desde caché...\n")
@@ -433,8 +441,8 @@ temas_ia_puro <- stringr::str_match_all(resultado_macro_temas, "\\*\\*(.*?)\\*\\
 # Comprobamos el resultado
 print(temas_ia_puro)
 
-ruta_analisis_ia <- "data/datos_analisis_ia.rds"
-ruta_analisis_ia_backup <- "data/datos_analisis_ia_backup.rds"
+ruta_analisis_ia <- paste0("data/", fuente_activa, "/datos_analisis_ia.rds")
+ruta_analisis_ia_backup <- paste0("data/", fuente_activa, "/datos_analisis_ia_backup.rds")
 
 if (file.exists(ruta_analisis_ia)) {
   
@@ -570,13 +578,12 @@ df_temas_ia <- gamma_ia_sintetico |>
     values_fn = mean
   )
 
-# 2. Guardamos el dataframe listo para el FCA
-saveRDS(df_temas_ia, file = "data/df_temas_ia.rds")
+saveRDS(df_temas_ia, file = paste0("data/", fuente_activa, "/df_temas_ia.rds"))
 
 # (Opcional) Guardamos también tu versión larga por si la necesitas para hacer gráficas de barras/sectores en tu memoria
-saveRDS(gamma_ia_sintetico, file = "data/gamma_ia_sintetico.rds")
+saveRDS(gamma_ia_sintetico, file = paste0("data/", fuente_activa, "/gamma_ia_sintetico.rds"))
 
-cat("\n[INFO] Matriz de temas de la IA guardada en 'data/df_temas_ia.rds'.\n")
+cat("\n[INFO] Matriz de temas de la IA guardada.\n")
 ```
 
 

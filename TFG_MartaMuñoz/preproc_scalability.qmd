@@ -1,5 +1,5 @@
 ---
- title: "Carga y preprocesamiento de datos"
+ title: "Carga y preprocesamiento de datos masivos"
  subtitle: "Trabajo de Fin de Grado - Ingeniería Informática"
  author: "Marta Muñoz Aguilar"
  date: "`r Sys.Date()`"
@@ -9,7 +9,6 @@
      toc-depth: 3
      code-fold: show
      theme: cosmo
-     highlight-style: dracula
 ---
 
 
@@ -20,6 +19,9 @@ library(tidyverse)
 library(tidytext) # La joya de la corona para NLP moderno
 library(tm)       # Solo lo mantenemos para la conversión final de la matriz
 library(textstem)
+
+# Asegurar que el directorio de salida existe
+dir.create("data/kaggle", recursive = TRUE, showWarnings = FALSE)
 
 # (En la memoria explicamos que esta es la Fase 2: Ingesta Masiva)
 # Carga de la muestra de estrés de Kaggle (50.000 filas)
@@ -50,7 +52,7 @@ datos <- dataset_bruto |>
          golds = 0,
          parent_id = NA_character_)
 
-saveRDS(datos, "data/data_sample.rds")
+saveRDS(datos, "data/kaggle/data_sample.rds")
 ```
 
 
@@ -77,7 +79,7 @@ edges_co_participacion <- participaciones |>
 
 data_sna <- edges_co_participacion
 
-saveRDS(data_sna, "data/data_sna.rds")
+saveRDS(data_sna, "data/kaggle/data_sna.rds")
 ```
 
 
@@ -97,13 +99,13 @@ data_texto <- datos |>
   ) |>
   filter(texto_limpio != "")
 
-saveRDS(data_texto, "data/data_texto_procesado.rds")
+saveRDS(data_texto, "data/kaggle/data_texto_procesado.rds")
 
 textos_sentimiento <- data_texto |>
   mutate(texto_sentimiento = texto_limpio) |>
   select(-texto_limpio)
 
-saveRDS(textos_sentimiento, "data/textos_sentimiento.rds")
+saveRDS(textos_sentimiento, "data/kaggle/textos_sentimiento.rds")
 ```
 
 
@@ -134,6 +136,6 @@ dtm_lda <- removeSparseTerms(dtm_bruta, 0.99)
 
 cat("Matriz lista para el modelo LDA. Dimensiones:", dim(dtm_lda)[1], "documentos x", dim(dtm_lda)[2], "términos.\n")
 
-saveRDS(dtm_lda, "data/dtm_lda.rds")
+saveRDS(dtm_lda, "data/kaggle/dtm_lda.rds")
 ```
 
