@@ -175,6 +175,7 @@ options(shiny.maxRequestSize = 200 * 1024^2)
 shiny::addResourcePath("images", "images")
 
 ui <- dashboardPage(
+  title = "TFG - Análisis Reddit",
   skin = "blue",
   dashboardHeader(
     title = tagList(
@@ -893,6 +894,59 @@ ui <- dashboardPage(
         .hasse-tooltip strong {
           color: var(--text-secondary) !important;
         }
+
+        /* Estilos premium para la leyenda de la red interactiva (SNA) */
+        .sna-legend-card {
+          position: absolute;
+          right: 20px;
+          top: 20px;
+          z-index: 999;
+          background-color: var(--bg-card);
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          padding: 14px 18px;
+          box-shadow: var(--box-shadow);
+          pointer-events: none;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          min-width: 190px;
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+        }
+        .sna-legend-title {
+          font-family: 'Outfit', sans-serif;
+          font-weight: 700;
+          font-size: 13px;
+          color: var(--text-primary);
+          margin-bottom: 10px;
+          border-bottom: 1px solid var(--border-color);
+          padding-bottom: 6px;
+          letter-spacing: -0.2px;
+        }
+        .sna-legend-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .sna-legend-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .sna-legend-dot {
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          display: inline-block;
+          flex-shrink: 0;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.12);
+        }
+        .sna-legend-label {
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--text-secondary);
+          white-space: nowrap;
+        }
       "))
     ),
     tabItems(
@@ -1056,6 +1110,7 @@ ui <- dashboardPage(
               )
             )
           ),
+          uiOutput("topic_names_panel"),
           box(
             width = 12,
             title = "Visualización de Tópicos",
@@ -1093,8 +1148,8 @@ ui <- dashboardPage(
                 conditionalPanel(
                   condition = "input.fca_tabs == 'conceptos'",
                   fluidRow(
-                    column(4, numericInput("fca_min_attributes", "Min atributos por concepto", value = 3, min = 1, step = 1)),
-                    column(4, numericInput("fca_min_comments", "Min comentarios (soporte)", value = 5, min = 1, step = 1)),
+                    column(4, numericInput("fca_min_attributes", "Min atributos por concepto", value = 1, min = 1, step = 1)),
+                    column(4, numericInput("fca_min_comments", "Min comentarios (soporte)", value = 0, min = 0, step = 1)),
                     column(4, numericInput("fca_top_n", "Top N conceptos", value = 20, min = 1, step = 1))
                   ),
                   fluidRow(
@@ -1454,13 +1509,81 @@ server <- function(input, output, session) {
   output$sent_titulo <- renderUI({
     metodo <- switch(
       input$sent_metodo,
-      clasico = "Algoritmo clásico (NRC / Syuzhet)",
-      ia = "Inteligencia Artificial (LLM / Ollama)",
+      clasico = "Algoritmo clásico (LDA)",
+      ia = "Inteligencia Artificial (LLM)",
       comparativa = "Comparativa entre metodologías"
     )
     tags$p(tags$strong(metodo), style = "color: #555; margin-bottom: 12px;")
   })
   
+  output$topic_names_panel <- renderUI({
+    # Cargar nombres de temas clásicos
+    if (rv$archivo_cargado) {
+      req(rv$modelo_lda)
+      clasico_temas <- paste0("Topic ", 1:rv$modelo_lda@k)
+    } else {
+      clasico_temas <- tryCatch(readRDS("data/nombres_temas.rds"), error = function(e) paste0("Topic ", 1:6))
+    }
+    
+    # Cargar nombres de temas de IA
+    ia_temas <- tryCatch(readRDS("data/temas_ia_puro.rds"), error = function(e) NULL)
+    
+    # Crear la lista de temas clásicos en HTML
+    clasico_html <- tags$ul(
+      style = "padding-left: 20px; margin: 0; line-height: 1.8; color: var(--text-primary);",
+      lapply(seq_along(clasico_temas), function(i) {
+        tags$li(
+          clasico_temas[i]
+        )
+      })
+    )
+    
+    # Crear la lista de temas de IA en HTML
+    if (!is.null(ia_temas)) {
+      ia_html <- tags$ul(
+        style = "padding-left: 20px; margin: 0; line-height: 1.8; color: var(--text-primary);",
+        lapply(seq_along(ia_temas), function(i) {
+          tags$li(
+            ia_temas[i]
+          )
+        })
+      )
+    } else {
+      ia_html <- tags$p("No hay temas de IA precalculados disponibles.", style = "color: var(--text-secondary);")
+    }
+    
+    # Si el usuario cargó su propio archivo, el modelo de IA no se aplica
+    if (rv$archivo_cargado) {
+      ia_section <- tagList(
+        tags$h5(tags$strong("Temas IA (LLM / Ollama):"), style = "color: var(--text-secondary); margin-top: 0; font-weight: 600;"),
+        tags$p("Los temas de IA no están disponibles para datasets cargados por el usuario (solo soportado en los datos de demostración).", style = "font-size: 13px; color: var(--text-muted);")
+      )
+    } else {
+      ia_section <- tagList(
+        tags$h5(tags$strong("Temas IA (LLM / Ollama):"), style = "color: var(--text-secondary); margin-top: 0; font-weight: 600;"),
+        ia_html
+      )
+    }
+    
+    box(
+      width = 12,
+      title = "📋 Listado de Temas (Tópicos)",
+      status = "info",
+      solidHeader = TRUE,
+      collapsible = TRUE,
+      collapsed = TRUE,
+      fluidRow(
+        column(6,
+          tags$h5(tags$strong("Temas Algoritmo Clásico (LDA):"), style = "color: var(--text-secondary); margin-top: 0; font-weight: 600;"),
+          clasico_html
+        ),
+        column(6,
+          ia_section
+        )
+      )
+    )
+  })
+
   output$topic_titulo <- renderUI({
     metodo <- switch(
       input$topic_metodo,
@@ -1812,10 +1935,49 @@ server <- function(input, output, session) {
     }
     
     if (identical(input$sna_grafico, "interactive")) {
-      visNetworkOutput("sna_network", height = 650)
+      tags$div(
+        style = "position: relative; width: 100%; height: 650px;",
+        visNetworkOutput("sna_network", height = 650),
+        uiOutput("sna_network_legend_html")
+      )
     } else {
       plotOutput("sna_plot_static", height = 650)
     }
+  })
+  
+  output$sna_network_legend_html <- renderUI({
+    req(input$sna_highlight_roles)
+    
+    tags$div(
+      class = "sna-legend-card",
+      tags$div(
+        class = "sna-legend-title",
+        "Roles Sociales"
+      ),
+      tags$div(
+        class = "sna-legend-list",
+        tags$div(
+          class = "sna-legend-item",
+          tags$span(class = "sna-legend-dot", style = "background-color: #1f77b4;"),
+          tags$span(class = "sna-legend-label", "Broker (Conector)")
+        ),
+        tags$div(
+          class = "sna-legend-item",
+          tags$span(class = "sna-legend-dot", style = "background-color: #2ca02c;"),
+          tags$span(class = "sna-legend-label", "Autoridad (Referencia)")
+        ),
+        tags$div(
+          class = "sna-legend-item",
+          tags$span(class = "sna-legend-dot", style = "background-color: #d62728;"),
+          tags$span(class = "sna-legend-label", "Hub (Difusor activo)")
+        ),
+        tags$div(
+          class = "sna-legend-item",
+          tags$span(class = "sna-legend-dot", style = "background-color: #9467bd;"),
+          tags$span(class = "sna-legend-label", "Usuario Regular")
+        )
+      )
+    )
   })
   
   output$sna_network <- renderVisNetwork({
@@ -1873,30 +2035,7 @@ server <- function(input, output, session) {
         # 2. SOLUCIÓN A LA IA: htmlwidgets::JS() obliga al navegador a reconocer el evento del clic
         visEvents(selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('sna_node', event.nodes[0], {priority:'event'}); } }"))
 
-      if (isTRUE(input$sna_highlight_roles)) {
-        legend_title_color <- if (isTRUE(input$theme_switch)) "#cbd5e1" else "#0f172a"
-        legend_nodes <- data.frame(
-          label = c("Broker (Conector)", "Autoridad (Referencia)", "Hub (Difusor activo)", "Usuario Regular"),
-          color = c("#1f77b4", "#2ca02c", "#d62728", "#9467bd"),
-          shape = "dot",
-          size = 10,
-          font.size = 11,
-          font.color = legend_title_color,
-          stringsAsFactors = FALSE
-        )
-        v_net <- v_net |> visLegend(
-          addNodes = legend_nodes,
-          useGroups = FALSE,
-          width = 0.18,
-          position = "right",
-          zoom = FALSE,
-          main = list(
-            text = "Roles Sociales",
-            style = paste0("font-family:Outfit,Inter,sans-serif;font-weight:bold;font-size:12px;fill:", legend_title_color, ";")
-          )
-        )
-      }
-      
+      # Leyenda interna deshabilitada para usar una versión HTML limpia, alineada y responsive
       v_net
     })
   })
@@ -2110,7 +2249,7 @@ server <- function(input, output, session) {
         "Eres un experto en análisis de redes sociales e interpretarás los datos obligatoriamente en español (España).\n",
         "Contexto: análisis SNA con métricas topológicas y roles de usuarios.\n",
         "Nodo seleccionado: {node_data$name}\n",
-        "Métricas: Grado={node_data$degree}, Betweenness={round(node_data$betweenness,3)}, Pagerank={round(node_data$pagerank,4)}\n",
+        "Métricas: Grado={node_data$degree}, Intermediación={round(node_data$betweenness,3)}, Pagerank={round(node_data$pagerank,4)}\n",
         "Rol: {ifelse(is.na(node_data$Rol), 'N/A', node_data$Rol)}\n",
         "Explica su importancia estratégica en la red. REGLA ESTRICTA: Tu respuesta debe estar redactada en español, tener como máximo 2 frases, ser extremadamente concisa y no contener palabras en portugués ni ningún otro idioma."
       )
@@ -2272,7 +2411,7 @@ server <- function(input, output, session) {
     )
     
     fc <- FormalContext$new(matriz_fca_final)
-    fc$clarify()
+    # fc$clarify() # Comentado para evitar desalineación entre columnas de la matriz y renglones de intensión
     fc$find_concepts()
     fc$find_implications()
     
@@ -2339,7 +2478,7 @@ server <- function(input, output, session) {
         title = "Contexto Formal",
         value = "contexto_formal",
         fluidRow(
-          column(12, h4("Matriz del Contexto Formal (Atributos por Comentario)")),
+          column(12, h4("Contexto Formal")),
           column(12, DT::dataTableOutput("fca_context_table"))
         )
       ),
@@ -2423,17 +2562,26 @@ server <- function(input, output, session) {
     res <- fca_resultados()
     if (is.null(res)) return(helpText("Pulsa 'Calcular FCA' para cargar los datos."))
     if (input$fca_ia_type == "concepto") {
-      choices <- res$tabla_conceptos$ID_Concepto
+      choices <- fca_displayed_ord()
+      if (is.null(choices) || length(choices) == 0) {
+        return(helpText("No hay conceptos disponibles con los filtros actuales."))
+      }
       selectInput("fca_ia_item", "Seleccionar concepto", choices = setNames(choices, paste0("Concepto ", choices)), selected = choices[1])
     } else {
       imp <- res$implicaciones
-      if (length(imp) == 0) {
-        helpText("No se encontraron implicaciones.")
-      } else {
-        # use index because implication text can be long
-        choices <- seq_along(imp)
-        selectInput("fca_ia_item", "Seleccionar implicación", choices = setNames(choices, paste0("Implicación ", choices)), selected = choices[1])
+      indices <- seq_along(imp)
+      sel_attrs <- input$fca_atributos
+      if (!is.null(sel_attrs) && length(sel_attrs) > 0) {
+        keep <- sapply(imp, function(rule) {
+          all(sapply(sel_attrs, function(attr) grepl(attr, rule, fixed = TRUE)))
+        })
+        imp <- imp[keep]
+        indices <- indices[keep]
       }
+      if (length(imp) == 0) {
+        return(helpText("No se encontraron implicaciones con los atributos seleccionados."))
+      }
+      selectInput("fca_ia_item", "Seleccionar implicación", choices = setNames(indices, paste0("Implicación ", indices)), selected = indices[1])
     }
   })
   
@@ -2484,27 +2632,29 @@ server <- function(input, output, session) {
       )
     }
     
-    tryCatch({
-      resp <- request("http://localhost:11434/api/chat") |>
-        req_body_json(list(
-          model = "qwen2.5:3b",
-          messages = list(
-            list(role = "system", content = "Actúas como un sociólogo computacional y analista experto. Debes responder siempre y obligatoriamente en español (España)."),
-            list(role = "user", content = prompt_text)
-          ),
-          stream = FALSE,
-          options = list(temperature = 0.35)
-        )) |>
-        req_timeout(300) |>
-        req_perform()
-      parsed <- resp_body_json(resp)
-      if (!is.null(parsed$message$content)) {
-        parsed$message$content
-      } else {
-        "No se recibió contenido de la IA."
-      }
-    }, error = function(e) {
-      paste("Error al consultar la IA:", conditionMessage(e))
+    withProgress(message = "Consultando a Ollama...", value = 0.5, {
+      tryCatch({
+        resp <- request("http://localhost:11434/api/chat") |>
+          req_body_json(list(
+            model = "qwen2.5:3b",
+            messages = list(
+              list(role = "system", content = "Actúas como un sociólogo computacional y analista experto. Debes responder siempre y obligatoriamente en español (España)."),
+              list(role = "user", content = prompt_text)
+            ),
+            stream = FALSE,
+            options = list(temperature = 0.35)
+          )) |>
+          req_timeout(300) |>
+          req_perform()
+        parsed <- resp_body_json(resp)
+        if (!is.null(parsed$message$content)) {
+          parsed$message$content
+        } else {
+          "No se recibió contenido de la IA."
+        }
+      }, error = function(e) {
+        paste("Error al consultar la IA:", conditionMessage(e))
+      })
     })
   })
   
@@ -2623,7 +2773,22 @@ server <- function(input, output, session) {
     df_matrix[] <- lapply(df_matrix, function(col) ifelse(col == 1, "X", ""))
     df_full <- cbind(df_meta_clean, df_matrix)
     
-    DT::datatable(df_full, options = list(pageLength = 10, autoWidth = TRUE, scrollX = TRUE), rownames = FALSE)
+    # Identificar índices de las columnas de atributos (0-indexed en DataTables)
+    attr_cols <- seq(from = ncol(df_meta_clean), to = ncol(df_full) - 1)
+    
+    DT::datatable(
+      df_full, 
+      options = list(
+        pageLength = 5, 
+        lengthMenu = list(c(5, 10, 25, 50, -1), c('5', '10', '25', '50', 'Todos')),
+        autoWidth = TRUE, 
+        scrollX = TRUE,
+        columnDefs = list(
+          list(className = 'dt-center', targets = attr_cols)
+        )
+      ), 
+      rownames = FALSE
+    )
   })
   
   output$fca_concepts_table <- DT::renderDataTable({
@@ -2653,7 +2818,14 @@ server <- function(input, output, session) {
     # Ordenar por soporte y limitar a top N
     ord <- ids[order(-soportes_reales[ids])]
     topn <- as.integer(input$fca_top_n)
-    if (length(ord) > topn) ord <- ord[1:topn]
+    if (length(ord) > topn) {
+      bottom_id <- which.max(colSums(intents > 0))
+      if (bottom_id %in% ids) {
+        ord <- c(setdiff(ord, bottom_id)[1:(topn - 1)], bottom_id)
+      } else {
+        ord <- ord[1:topn]
+      }
+    }
     
     df <- lapply(ord, function(i) {
       atributos_activos <- nombres_atributos[intents[, i] > 0]
@@ -2678,122 +2850,238 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
   
   output$fca_concepts_net <- renderVisNetwork({
-    input$fca_run
-    input$fca_tabs
-    res <- fca_resultados()
-    validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
-    
-    intents <- as.matrix(res$concepts_intents)
-    nombres_atributos <- colnames(res$matriz)
-    n_comentarios <- nrow(res$matriz)
-    soportes_reales <- round(res$soportes * n_comentarios)
-    
-    min_attr <- as.integer(input$fca_min_attributes)
-    min_comments <- as.integer(input$fca_min_comments)
-    ids <- which(colSums(intents > 0) >= min_attr & soportes_reales >= min_comments)
-    sel_attrs <- input$fca_atributos
-    if (!is.null(sel_attrs) && length(sel_attrs) > 0) {
-      ids <- ids[sapply(ids, function(i) all(sel_attrs %in% nombres_atributos[intents[, i] > 0]))]
-    }
-    if (length(ids) == 0) {
-      fca_displayed_ord(NULL)
-      fca_displayed_edges(NULL)
-      return(NULL)
-    }
-    ord <- ids[order(-soportes_reales[ids])]
-    topn <- as.integer(input$fca_top_n)
-    if (length(ord) > topn) ord <- ord[1:topn]
-    
-    # Nodos con estilo limpio
-    nodes <- data.frame(
-      id = seq_along(ord),
-      title = paste0("Concepto ", ord),
-      label = paste0("C", ord, " (", soportes_reales[ord], ")"),
-      value = pmax(1, soportes_reales[ord]),
-      stringsAsFactors = FALSE
-    )
-    
-    # Aristas
-    sub_intents <- intents[, ord, drop = FALSE]
-    k <- ncol(sub_intents)
-    edges_list <- list()
-    if (k > 1) {
-      for (i in 1:(k - 1)) {
-        for (j in (i + 1):k) {
-          a <- sub_intents[, i] > 0
-          b <- sub_intents[, j] > 0
-          inter <- sum(a & b)
-          union <- sum(a | b)
-          sim <- ifelse(union == 0, 0, inter / union)
-          if (sim > 0.20) {
-            # Direccionamos la arista del concepto más general al más específico
-            if (sum(a) < sum(b)) {
-              edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2))
-            } else if (sum(a) > sum(b)) {
-              edges_list[[length(edges_list) + 1]] <- data.frame(from = j, to = i, width = round(sim * 10, 2))
-            } else {
-              edges_list[[length(edges_list) + 1]] <- data.frame(from = min(i,j), to = max(i,j), width = round(sim * 10, 2))
-            }
-          }
-        }
-      }
-    }
-    edges <- if (length(edges_list) > 0) do.call(rbind, edges_list) else data.frame(from = integer(0), to = integer(0), width = numeric(0))
-    
-    # Reducción transitiva para limpiar aristas redundantes y mantener el esqueleto jerárquico limpio
-    if (nrow(edges) > 0 && k > 1) {
-      temp_vertices <- data.frame(name = as.character(seq_len(k)))
-      ig_temp <- igraph::graph_from_data_frame(d = edges, vertices = temp_vertices, directed = TRUE)
-      ig_reduced <- transitive_reduction(ig_temp)
-      edges <- igraph::as_data_frame(ig_reduced, what = "edges")
-      if (nrow(edges) > 0) {
-        edges$from <- as.integer(edges$from)
-        edges$to <- as.integer(edges$to)
-      } else {
-        edges <- data.frame(from = integer(0), to = integer(0), width = numeric(0), stringsAsFactors = FALSE)
-      }
-      
-      # Calcular el layout de Sugiyama para posicionamiento inicial jerárquico y libre movimiento posterior
-      lay <- igraph::layout_with_sugiyama(ig_reduced)
-      nodes$x <- lay$layout[, 1] * 280   # Espaciar horizontalmente a lo ancho
-      nodes$y <- -lay$layout[, 2] * 180  # Ir de arriba a abajo e invertir
-    } else {
-      # Posicionamiento fallback si no hay aristas
-      if (k > 0) {
-        nodes$x <- cos(seq_len(k) * 2 * pi / k) * 200
-        nodes$y <- sin(seq_len(k) * 2 * pi / k) * 200
-      }
-    }
-    
-    # Actualizar variables reactivas
-    fca_displayed_ord(ord)
-    fca_displayed_edges(edges)
-    
-    # Renderizado final con diseño jerárquico nativo y libre arrastre de nodos
-    visNetwork(nodes, edges) |>
-      visNodes(
-        shape = "dot", 
-        shadow = list(enabled = TRUE, size = 10),
-        scaling = list(min = 15, max = 45),
-        color = list(
-          background = "#78E08F", # Color verde/azulado base similar a la herramienta
-          border = "#38A3A5",
-          highlight = list(background = "#FFB703", border = "#F48C06") # Naranja al seleccionar
-        )
-      ) |> 
-      visEdges(
-        arrows = "to", 
-        smooth = list(type = "cubicBezier", forceDirection = "vertical"), # Curvas suaves hacia abajo
-        color = list(color = "#C0C0C0", highlight = "#FF7034")
-      ) |> 
-      visInteraction(dragNodes = TRUE, zoomView = TRUE) |>
-      visPhysics(enabled = FALSE) |> 
-      visOptions(highlightNearest = list(enabled = TRUE, degree = 1), nodesIdSelection = TRUE) |>
-      visEvents(
-        selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('fca_node_selected', event.nodes[0], {priority:'event'}); } }"),
-        deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_selected', null); }")
-      )
-  })
+
+input$fca_run
+
+input$fca_tabs
+
+res <- fca_resultados()
+
+validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
+
+
+intents <- as.matrix(res$concepts_intents)
+
+nombres_atributos <- colnames(res$matriz)
+
+n_comentarios <- nrow(res$matriz)
+
+soportes_reales <- round(res$soportes * n_comentarios)
+
+
+min_attr <- as.integer(input$fca_min_attributes)
+
+min_comments <- as.integer(input$fca_min_comments)
+
+ids <- which(colSums(intents > 0) >= min_attr & soportes_reales >= min_comments)
+
+sel_attrs <- input$fca_atributos
+
+if (!is.null(sel_attrs) && length(sel_attrs) > 0) {
+
+ids <- ids[sapply(ids, function(i) all(sel_attrs %in% nombres_atributos[intents[, i] > 0]))]
+
+}
+
+if (length(ids) == 0) {
+
+fca_displayed_ord(NULL)
+
+fca_displayed_edges(NULL)
+
+return(NULL)
+
+}
+
+ord <- ids[order(-soportes_reales[ids])]
+
+topn <- as.integer(input$fca_top_n)
+
+if (length(ord) > topn) {
+  bottom_id <- which.max(colSums(intents > 0))
+  if (bottom_id %in% ids) {
+    ord <- c(setdiff(ord, bottom_id)[1:(topn - 1)], bottom_id)
+  } else {
+    ord <- ord[1:topn]
+  }
+}
+
+
+# Nodos con estilo limpio
+
+nodes <- data.frame(
+
+id = seq_along(ord),
+
+title = paste0("Concepto ", ord),
+
+label = paste0("C", ord, " (", soportes_reales[ord], ")"),
+
+value = pmax(1, soportes_reales[ord]),
+
+stringsAsFactors = FALSE
+
+)
+
+
+# Aristas
+
+sub_intents <- intents[, ord, drop = FALSE]
+
+k <- ncol(sub_intents)
+
+# Calcular el número de atributos (especificidad) para cada concepto
+num_atributos <- sapply(seq_along(ord), function(idx) sum(sub_intents[, idx] > 0))
+max_attr <- max(num_atributos, 1)
+
+# Generar paleta de colores funcionales (cálido a frío: rojo -> naranja -> verde -> azul)
+# A menor número de atributos (más general/alto), más cálido (rojo/naranja)
+# A mayor número de atributos (más específico/bajo), más frío (verde/azul)
+paleta_bg <- colorRampPalette(c("#ff6b6b", "#feca57", "#1dd1a1", "#54a0ff"))(max_attr + 1)
+paleta_border <- colorRampPalette(c("#ee5253", "#ff9f43", "#10ac84", "#2e86de"))(max_attr + 1)
+
+nodes$color.background <- paleta_bg[num_atributos + 1]
+nodes$color.border <- paleta_border[num_atributos + 1]
+nodes$title <- paste0("Concepto ", ord, " (", num_atributos, " atributos, ", soportes_reales[ord], " objetos)")
+
+edges_list <- list()
+
+if (k > 1) {
+
+for (i in 1:(k - 1)) {
+
+for (j in (i + 1):k) {
+
+a <- sub_intents[, i] > 0
+
+b <- sub_intents[, j] > 0
+
+inter <- sum(a & b)
+
+union <- sum(a | b)
+
+sim <- ifelse(union == 0, 0, inter / union)
+
+if (sim > 0.20) {
+
+# Direccionamos la arista del concepto más general al más específico
+
+if (sum(a) < sum(b)) {
+
+edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2))
+
+} else if (sum(a) > sum(b)) {
+
+edges_list[[length(edges_list) + 1]] <- data.frame(from = j, to = i, width = round(sim * 10, 2))
+
+}
+
+}
+
+}
+
+}
+
+}
+
+# Conectar nodos hojas al concepto vacío (bottom_id) si este está presente para evitar que quede aislado
+bottom_id <- which.max(colSums(intents > 0))
+bottom_idx <- which(ord == bottom_id)
+if (length(bottom_idx) > 0 && k > 1) {
+  from_nodes <- if (length(edges_list) > 0) sapply(edges_list, function(e) e$from) else integer(0)
+  leaf_nodes <- setdiff(seq_len(k), c(from_nodes, bottom_idx))
+  for (leaf in leaf_nodes) {
+    a <- sub_intents[, leaf] > 0
+    b <- sub_intents[, bottom_idx] > 0
+    sim <- sum(a & b) / sum(a | b)
+    width_val <- if (sim > 0) round(sim * 10, 2) else 1.0
+    edges_list[[length(edges_list) + 1]] <- data.frame(from = leaf, to = bottom_idx, width = width_val)
+  }
+}
+
+edges <- if (length(edges_list) > 0) do.call(rbind, edges_list) else data.frame(from = integer(0), to = integer(0), width = numeric(0))
+
+
+# Reducción transitiva para limpiar aristas redundantes y mantener el esqueleto jerárquico limpio
+
+if (nrow(edges) > 0 && k > 1) {
+
+temp_vertices <- data.frame(name = as.character(seq_len(k)))
+
+ig_temp <- igraph::graph_from_data_frame(d = edges, vertices = temp_vertices, directed = TRUE)
+
+ig_reduced <- transitive_reduction(ig_temp)
+
+edges <- igraph::as_data_frame(ig_reduced, what = "edges")
+
+if (nrow(edges) > 0) {
+
+edges$from <- as.integer(edges$from)
+
+edges$to <- as.integer(edges$to)
+
+} else {
+
+edges <- data.frame(from = integer(0), to = integer(0), width = numeric(0), stringsAsFactors = FALSE)
+
+}
+
+
+# Calcular el layout de Sugiyama para posicionamiento inicial jerárquico y libre movimiento posterior
+
+lay <- igraph::layout_with_sugiyama(ig_reduced)
+
+nodes$x <- lay$layout[, 1] * 450 # Espaciar horizontalmente a lo ancho
+
+nodes$y <- -lay$layout[, 2] * 260 # Ir de arriba a abajo e invertir
+
+} else {
+
+# Posicionamiento fallback si no hay aristas
+
+if (k > 0) {
+
+nodes$x <- cos(seq_len(k) * 2 * pi / k) * 200
+
+nodes$y <- sin(seq_len(k) * 2 * pi / k) * 200
+
+}
+
+}
+
+
+# Actualizar variables reactivas
+
+fca_displayed_ord(ord)
+
+fca_displayed_edges(edges)
+
+
+# Renderizado final con diseño jerárquico nativo y libre arrastre de nodos
+
+visNetwork(nodes, edges) |>
+visNodes(
+shape = "dot",
+shadow = list(enabled = TRUE, size = 10),
+scaling = list(min = 25, max = 65),
+color = list(
+highlight = list(background = "#FFB703", border = "#F48C06") # Naranja al seleccionar
+)) |>
+visEdges(
+arrows = "to",
+smooth = list(type = "cubicBezier", forceDirection = "vertical"), # Curvas suaves hacia abajo
+color = list(color = "#C0C0C0", highlight = "#FF7034")
+) |>
+visInteraction(dragNodes = TRUE, zoomView = TRUE) |>
+visPhysics(enabled = FALSE) |>
+visOptions(highlightNearest = list(enabled = TRUE, degree = 1), nodesIdSelection = TRUE) |>
+visEvents(
+selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('fca_node_selected', event.nodes[0], {priority:'event'}); } }"),
+deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_selected', null); }")
+)
+}) 
+
+
   
   # Renderizado del panel de detalles del concepto FCA seleccionado
   output$fca_concept_details_panel <- renderUI({
@@ -2876,8 +3164,7 @@ server <- function(input, output, session) {
         p_attrs <- nombres_atributos[intents[, p_concept_id] > 0]
         tags$div(
           style = "padding: 8px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; background: rgba(0, 0, 0, 0.02); font-size: 12px;",
-          tags$strong(paste0("Concepto ", p_concept_id, " (C", p_idx, ")"), style = "color: #38A3A5;"),
-          span(style = "float: right; font-weight: bold; color: var(--text-secondary);", paste(p_soporte, "comentarios")),
+          tags$strong(paste0("Concepto ", p_concept_id, " (C", p_idx, ") (", length(p_attrs), " atributos, ", p_soporte, " objetos)"), style = "color: #38A3A5;"),
           tags$p(style = "margin: 4px 0 0 0; font-family: monospace; color: var(--text-primary); font-size: 11px;", paste(p_attrs, collapse = " + "))
         )
       })
@@ -2898,8 +3185,7 @@ server <- function(input, output, session) {
         c_attrs <- nombres_atributos[intents[, c_concept_id] > 0]
         tags$div(
           style = "padding: 8px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; background: rgba(0, 0, 0, 0.02); font-size: 12px;",
-          tags$strong(paste0("Concepto ", c_concept_id, " (C", c_idx, ")"), style = "color: #38A3A5;"),
-          span(style = "float: right; font-weight: bold; color: var(--text-secondary);", paste(c_soporte, "comentarios")),
+          tags$strong(paste0("Concepto ", c_concept_id, " (C", c_idx, ") (", length(c_attrs), " atributos, ", c_soporte, " objetos)"), style = "color: #38A3A5;"),
           tags$p(style = "margin: 4px 0 0 0; font-family: monospace; color: var(--text-primary); font-size: 11px;", paste(c_attrs, collapse = " + "))
         )
       })
@@ -2909,15 +3195,6 @@ server <- function(input, output, session) {
     
     # Renderizar el panel lateral con las 3 secciones desplegables
     tagList(
-      # Caja cabecera de información general
-      tags$div(
-        style = "background: var(--bg-card); border: 1px solid var(--border-color); border-left: 4px solid var(--btn-primary-bg); border-radius: 16px; padding: 14px 18px; margin-bottom: 16px; box-shadow: var(--box-shadow);",
-        tags$h3(style = "margin: 0; font-size: 16px; font-weight: bold; color: var(--text-primary);", 
-                paste0("Concepto ", concept_id, " (Nodo C", idx, ")")),
-        tags$p(style = "margin: 6px 0 0 0; font-size: 12px; color: var(--text-secondary);",
-               paste("Soporte:", soporte_concepto, "comentarios (", round(soporte_concepto/n_comentarios*100, 1), "%)"))
-      ),
-      
       # Sección 1: Objetos y Atributos (Desplegable)
       box(
         title = "🏷️ Objetos y Atributos",
@@ -2926,7 +3203,7 @@ server <- function(input, output, session) {
         collapsible = TRUE,
         collapsed = FALSE,
         width = NULL,
-        tags$strong("Atributos del concepto:", style = "font-size: 13px;"),
+        tags$strong(paste0("Atributos (", length(atributos_activos), "):"), style = "font-size: 13px;"),
         tags$div(
           style = "margin: 8px 0 14px 0;",
           if (length(atributos_activos) > 0) {
@@ -2941,7 +3218,7 @@ server <- function(input, output, session) {
           }
         ),
         tags$hr(style = "margin: 10px 0; border-top: 1px solid var(--border-color);"),
-        tags$strong("Objetos (Comentarios pertenecientes):", style = "font-size: 13px;"),
+        tags$strong(paste0("Objetos (", soporte_concepto, "):"), style = "font-size: 13px;"),
         ejemplos_html
       ),
       
@@ -3059,7 +3336,14 @@ server <- function(input, output, session) {
       }
       ord <- ids[order(-soportes_reales[ids])]
       topn <- as.integer(input$fca_top_n)
-      if (length(ord) > topn) ord <- ord[1:topn]
+      if (length(ord) > topn) {
+        bottom_id <- which.max(colSums(intents > 0))
+        if (bottom_id %in% ids) {
+          ord <- c(setdiff(ord, bottom_id)[1:(topn - 1)], bottom_id)
+        } else {
+          ord <- ord[1:topn]
+        }
+      }
       
       lines <- sapply(ord, function(i) {
         atributos_activos <- nombres_atributos[intents[, i] > 0]

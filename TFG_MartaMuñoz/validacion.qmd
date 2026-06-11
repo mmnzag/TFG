@@ -27,14 +27,14 @@ analizar_con_ia <- function(sentenceo) {
   url <- "http://localhost:11434/v1/chat/completions"
   
   prompt <- paste(
-  "Act as an expert in cryptocurrency sentiment analysis.",
+  "Act as an expert in sentiment analysis.",
   "You are analyzing Reddit content. Your task is to perform an emotional classification.",
   
   "### TAXONOMY:",
   "Allowed emotions: [fear, sad, love, joy, surprise, anger].",
   
   "### INSTRUCTIONS:",
-  "1. Analyze the context of the sentence regarding cryptocurrency markets (e.g., understand 'HODL', 'moon', 'rekt', 'rug pull').",
+  "1. Analyze the context of the sentence.",
   "2. Reason briefly about the sentiment before selecting the emotion.",
   "3. Return ONLY a valid JSON object with the following structure:",
   "{",

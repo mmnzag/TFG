@@ -322,41 +322,14 @@ Se genera un resumen descriptivo del conjunto de datos calculando la frecuencia 
 ```{r}
 # Sumamos las columnas para ver la frecuencia de cada atributo
 resumen_atributos <- data.frame(
-  Atributo = colnames(matriz_fca_final),
+  # Atributo = colnames(matriz_fca_final),
   Frecuencia = colSums(matriz_fca_final),
   Porcentaje = round((colSums(matriz_fca_final) / nrow(matriz_fca_final)) * 100, 1)
 )
 
 # resumen_atributos <- resumen_atributos[order(-resumen_atributos$Porcentaje), ]
-resumen_atributos[order(resumen_atributos$Atributo),]
+resumen_atributos[order(-resumen_atributos$Frecuencia),]
 
-```
-
-
-
-## Visualización
-
-Para evitar la oclusión visual propia de matrices de alta dimensionalidad, se aísla un subconjunto específico de seis atributos críticos. A partir de este subcontexto, se recalcula el retículo y se invoca la función de ploteo para generar el diagrama de Hasse, suprimiendo las etiquetas de los objetos (comentarios) para obtener una representación gráfica limpia de la jerarquía de conceptos.
-```{r}
-# --- VISUALIZACIÓN DEL RETÍCULO (Contexto Reducido) ---
-# Seleccionamos solo 6 atributos clave para que el gráfico sea legible en el TFG
-atributos_top <- c("Autor_Alta_Influencia", "Autor_Alto_Puente", 
-                   "Coment_Alto_Impacto", "Emocion_Alegria", 
-                   "Tema_BlockchainTech", "Tema_DebtCrisis")
-
-# Verificamos que los atributos existen en la matriz
-atributos_presentes <- intersect(atributos_top, colnames(matriz_fca_final))
-
-matriz_plot <- matriz_fca_final[, atributos_presentes]
-rownames(matriz_plot) <- rep("", nrow(matriz_plot))
-# Creamos un mini-contexto solo para la visualización
-fc_plot <- FormalContext$new(matriz_plot)
-fc_plot$find_concepts()
-
-fc_plot$concepts$size()
-
-# Ploteamos sin las etiquetas de los comentarios para mayor limpieza
-fc_plot$concepts$plot()
 ```
 
 

@@ -1,13 +1,22 @@
 # Introducción {.unnumbered}
 
+La irrupción de la Inteligencia Artificial (IA) como fenómeno de alcance global ha transformado no solo el ámbito tecnológico, sino también el debate público. Plataformas de discusión en línea como Reddit se han convertido en espacios donde millones de usuarios expresan, debaten y confrontan sus opiniones sobre esta tecnología, generando un corpus de texto masivo, heterogéneo y en constante evolución que resulta de gran valor para el estudio de la percepción social.
 
-El objetivo principal de este proyecto es analizar las dinámicas sociales, el sentimiento y los temas subyacentes en los debates en la plataforma Reddit.
+El presente Trabajo de Fin de Grado aborda el análisis computacional de las discusiones sobre IA en Reddit con el objetivo de extraer conocimiento significativo a partir de datos no estructurados. Para ello se aplica un enfoque multidisciplinar que combina técnicas procedentes de la minería de textos, el análisis de redes sociales y el aprendizaje automático.
 
-Para ello, utilizamos una combinación de técnicas analíticas:
+## Motivación y Objetivos
 
-1.  **Minería de Textos y Preprocesamiento**: Para limpiar y preparar los datos no estructurados extraídos de los comentarios.
-2.  **Análisis de Redes Sociales (SNA)**: Para comprender cómo interactúan los usuarios entre sí.
-3.  **Análisis de Sentimientos**: Para evaluar la polaridad emocional y las reacciones asociadas.
-4.  **Modelado de Temas (Topic Modeling)**: Implementando algoritmos como Latent Dirichlet Allocation (LDA) para descubrir los tópicos latentes en la discusión.
-5.  **Análisis Formal de Conceptos (FCA)**: Para encontrar relaciones jerárquicas y dependencias entre los conceptos y sentimientos.
+El interés de este trabajo reside en comprender cómo la comunidad en línea percibe y discute la IA: qué temas concentran mayor atención, cómo se organizan las interacciones entre usuarios y qué carga emocional predomina en el discurso. Responder a estas preguntas puede ser relevante tanto desde una perspectiva académica —en el ámbito de la minería de opiniones y el análisis del discurso digital— como aplicada, de cara a identificar tendencias o focos de controversia.
+
+Los objetivos concretos del trabajo son:
+
+1. **Preprocesar** el corpus de comentarios de Reddit para obtener una representación limpia y normalizada del texto.
+2. **Modelar la red de interacciones** entre usuarios mediante técnicas de Análisis de Redes Sociales (SNA).
+3. **Cuantificar el sentimiento** asociado a las discusiones, evaluando la polaridad emocional de los comentarios.
+4. **Descubrir los tópicos latentes** presentes en el corpus mediante modelado de temas con Latent Dirichlet Allocation (LDA).
+5. **Explorar relaciones conceptuales** entre sentimientos y tópicos aplicando Análisis Formal de Conceptos (FCA).
+
+## Estructura del Documento
+
+La memoria se organiza en capítulos que siguen el flujo natural del análisis. El **Capítulo 1** describe el preprocesamiento y la preparación de los datos. El **Capítulo 2** presenta el análisis de la red social de usuarios. El **Capítulo 3** recoge el análisis de sentimientos. El **Capítulo 4** expone los resultados del modelado de temas. Finalmente, el **Capítulo 5** aplica el Análisis Formal de Conceptos para integrar las dimensiones previas en una visión unificada.
 
