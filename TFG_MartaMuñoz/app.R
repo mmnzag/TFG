@@ -24,6 +24,19 @@ library(purrr)
 library(tibble)
 library(tidyr)
 
+# Selector de fuente de datos ("reddit" o "kaggle")
+fuente_activa <- "kaggle" 
+
+# Construcción dinámica de la ruta
+ruta_tabla_roles <- paste0("data/", fuente_activa, "/tabla_roles.rds")
+ruta_data_sentim <- paste0("data/", fuente_activa, "/data_sentim_ia.rds")
+ruta_df_temas <- paste0("data/", fuente_activa, "/df_temas_ia.rds")
+
+# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+tabla_roles <- readRDS(ruta_tabla_roles)
+data_sentim <- readRDS(ruta_data_sentim)
+df_temas <- as.data.frame(readRDS(ruta_df_temas), stringsAsFactors = FALSE, check.names = FALSE)
+
 # Dinámicamente añadir el método 'levels' a la clase ConceptLattice de fcaR para que fc$concepts$levels() funcione de forma nativa
 fcaR::ConceptLattice$set("public", "levels", function() {
   self$.__enclos_env__$private$build_adjacency()
@@ -91,8 +104,8 @@ obtener_tema_plot <- function(light = FALSE) {
       plot.subtitle = element_text(color = "#94a3b8", size = 11, hjust = 0.5),
       axis.text = element_text(color = "#94a3b8"),
       axis.title = element_text(color = "#cbd5e1"),
-      panel.grid.major = element_line(color = "rgba(255, 255, 255, 0.06)", linewidth = 0.5),
-      panel.grid.minor = element_line(color = "rgba(255, 255, 255, 0.02)", linewidth = 0.25),
+      panel.grid.major = element_line(color = "#ffffff10", linewidth = 0.5),
+      panel.grid.minor = element_line(color = "#ffffff05", linewidth = 0.25),
       legend.text = element_text(color = "#cbd5e1"),
       legend.title = element_text(color = "#cbd5e1"),
       legend.position = "bottom"
@@ -175,12 +188,12 @@ options(shiny.maxRequestSize = 200 * 1024^2)
 shiny::addResourcePath("images", "images")
 
 ui <- dashboardPage(
-  title = "TFG - Análisis Reddit",
+  title = "Reddit Analyser",
   skin = "blue",
   dashboardHeader(
     title = tagList(
-      span(class = "logo-lg", "TFG - Análisis Reddit"),
-      span(class = "logo-mini", "TFG")
+      span(class = "logo-lg", "Reddit Analyser"),
+      span(class = "logo-mini", "RA")
     ),
     tags$li(
       class = "dropdown download-rds-container",
@@ -242,10 +255,69 @@ ui <- dashboardPage(
               });
             }
           });
+          /* Fix vis-tooltip inline styles injected by vis.js */
+          $('.vis-tooltip').each(function() {
+            if (isDark) {
+              this.style.setProperty('background', '#131a26', 'important');
+              this.style.setProperty('color', '#f8fafc', 'important');
+              this.style.setProperty('border', '1px solid rgba(255,255,255,0.08)', 'important');
+              this.style.setProperty('box-shadow', '0 10px 30px rgba(0,0,0,0.4)', 'important');
+              $(this).find('b, strong').each(function(){ this.style.setProperty('color', '#f8fafc', 'important'); });
+            } else {
+              this.style.setProperty('background', '#ffffff', 'important');
+              this.style.setProperty('color', '#0f172a', 'important');
+              this.style.setProperty('border', '1px solid rgba(0,0,0,0.08)', 'important');
+              this.style.setProperty('box-shadow', '0 10px 30px rgba(0,0,0,0.05)', 'important');
+              $(this).find('b, strong').each(function(){ this.style.setProperty('color', '#0f172a', 'important'); });
+            }
+          });
         }
+
+        function styleTooltip(el) {
+          var isDark = $('body').hasClass('dark-theme');
+          if (isDark) {
+            el.style.setProperty('background', '#131a26', 'important');
+            el.style.setProperty('color', '#f8fafc', 'important');
+            el.style.setProperty('border', '1px solid rgba(255,255,255,0.08)', 'important');
+            el.style.setProperty('box-shadow', '0 10px 30px rgba(0,0,0,0.4)', 'important');
+            el.style.setProperty('border-radius', '8px');
+            el.style.setProperty('font-family', 'Inter, sans-serif');
+            el.style.setProperty('font-size', '13px');
+            el.style.setProperty('padding', '8px 12px');
+            $(el).find('b, strong').each(function(){ this.style.setProperty('color', '#f8fafc', 'important'); });
+          } else {
+            el.style.setProperty('background', '#ffffff', 'important');
+            el.style.setProperty('color', '#0f172a', 'important');
+            el.style.setProperty('border', '1px solid rgba(0,0,0,0.08)', 'important');
+            el.style.setProperty('box-shadow', '0 10px 30px rgba(0,0,0,0.05)', 'important');
+            $(el).find('b, strong').each(function(){ this.style.setProperty('color', '#0f172a', 'important'); });
+          }
+        }
+
         $(document).ready(function() {
           $('body').addClass('sidebar-mini');
           setInterval(fixSelects, 300);
+
+          /* MutationObserver: catch vis-tooltip the instant vis.js creates it */
+          var observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+              m.addedNodes.forEach(function(node) {
+                if (node.nodeType === 1) {
+                  if (node.classList && node.classList.contains('vis-tooltip')) {
+                    styleTooltip(node);
+                  }
+                  /* Also check children in case tooltip is nested */
+                  var inner = node.querySelectorAll ? node.querySelectorAll('.vis-tooltip') : [];
+                  inner.forEach(function(el) { styleTooltip(el); });
+                }
+              });
+              /* Also catch attribute mutations (vis.js may toggle visibility) */
+              if (m.type === 'attributes' && m.target.classList && m.target.classList.contains('vis-tooltip')) {
+                styleTooltip(m.target);
+              }
+            });
+          });
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
         });
         $(document).on('shiny:inputchanged', function(event) {
           if (event.name === 'theme_switch') {
@@ -255,6 +327,8 @@ ui <- dashboardPage(
               $('body').removeClass('dark-theme');
             }
             setTimeout(fixSelects, 50);
+            /* Re-style any visible tooltips immediately on theme change */
+            $('.vis-tooltip').each(function() { styleTooltip(this); });
           }
         });
       ")),
@@ -739,6 +813,17 @@ ui <- dashboardPage(
           margin-bottom: 0 !important;
         }
 
+        /* visNetwork tooltips styling */
+        div.vis-tooltip {
+          background: transparent !important;
+          background-color: transparent !important;
+          border: none !important;
+          border-radius: 8px !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+          overflow: visible !important;
+        }
+
         /* Shiny floating notifications / progress */
         .shiny-notification {
           background-color: var(--bg-card) !important;
@@ -1093,7 +1178,7 @@ ui <- dashboardPage(
             collapsible = TRUE,
             collapsed = FALSE,
             fluidRow(
-              column(8,
+              column(4,
                 radioButtons(
                   "topic_metodo",
                   "Metodología",
@@ -1107,6 +1192,12 @@ ui <- dashboardPage(
               ),
               column(4,
                 selectInput("topic_grafico", "Gráfico", choices = topic_graficos$clasico)
+              ),
+              column(4,
+                conditionalPanel(
+                  condition = "input.topic_metodo == 'clasico'",
+                  uiOutput("topic_controls_ui")
+                )
               )
             )
           ),
@@ -1264,23 +1355,57 @@ server <- function(input, output, session) {
   
   analizar_sentimientos_nrc <- function(df, columna_texto = "comment") {
     emociones_df <- syuzhet::get_nrc_sentiment(as.character(df[[columna_texto]]))
-    emociones_df <- emociones_df |>
-      dplyr::mutate(
-        valencia = positive - negative,
-        emocion_dominante = colnames(emociones_df[, 1:8])[apply(emociones_df[, 1:8], 1, which.max)]
-      )
+    
+    if (nrow(emociones_df) > 0) {
+      emociones_df$valencia <- emociones_df$positive - emociones_df$negative
+      # Obtener el índice de la emoción dominante (de las primeras 8 columnas) de forma segura y vectorizada
+      indices_max <- max.col(emociones_df[, 1:8], ties.method = "first")
+      emociones_df$emocion_dominante <- colnames(emociones_df[, 1:8])[indices_max]
+    } else {
+      emociones_df$valencia <- numeric(0)
+      emociones_df$emocion_dominante <- character(0)
+    }
+    
     return(emociones_df)
   }
   
   entrenar_modelo_lda <- function(df, columna_texto = "comment", num_topics = 5) {
     corpus <- quanteda::corpus(df[[columna_texto]])
-    dfm_obj <- quanteda::dfm(corpus,
-                             remove = c(quanteda::stopwords("spanish"), 
-                                       quanteda::stopwords("english")),
-                             stem = TRUE,
-                             min_termfreq = 2) |>
-      quanteda::dfm_trim(min_docfreq = 0.01, max_docfreq = 0.9)
+    quanteda::docnames(corpus) <- df$comment_id
+    
+    toks <- quanteda::tokens(corpus, remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE, remove_url = TRUE) |>
+      quanteda::tokens_remove(pattern = c(quanteda::stopwords("spanish"), quanteda::stopwords("english"))) |>
+      quanteda::tokens_wordstem()
+    
+    dfm_obj <- quanteda::dfm(toks)
+    
+    # Aplicar dfm_trim de forma segura para evitar vaciar la matriz DFM (especialmente en archivos de prueba pequeños)
+    if (quanteda::ndoc(dfm_obj) > 0 && quanteda::nfeat(dfm_obj) > 0) {
+      dfm_trimmed <- tryCatch({
+        quanteda::dfm_trim(dfm_obj, min_termfreq = 2, termfreq_type = "count", min_docfreq = 0.01, max_docfreq = 0.9, docfreq_type = "prop")
+      }, error = function(e) {
+        dfm_obj
+      })
+      
+      # Si la matriz podada no quedó vacía, la adoptamos. Si no, conservamos la original
+      if (quanteda::nfeat(dfm_trimmed) > 0 && quanteda::ndoc(dfm_trimmed) > 0) {
+        dfm_obj <- dfm_trimmed
+      }
+    }
+    
+    # Eliminar documentos vacíos de dfm_obj para evitar que la dtm tenga filas vacías y prevenir el error 'x debe ser un array'
+    row_sums <- rowSums(dfm_obj)
+    if (any(row_sums == 0)) {
+      dfm_obj <- dfm_obj[row_sums > 0, ]
+    }
+    
+    # Validar dimensiones de la matriz antes de la conversión a topicmodels para evitar el error 'x debe ser un array'
+    if (quanteda::ndoc(dfm_obj) < 2 || quanteda::nfeat(dfm_obj) < 2) {
+      stop("No hay suficientes términos o comentarios con contenido válido para entrenar el modelo de tópicos (LDA). Se requieren al menos 2 comentarios y 2 términos distintos.")
+    }
+    
     dtm <- quanteda::convert(dfm_obj, to = "topicmodels")
+    
     modelo_lda <- topicmodels::LDA(dtm, k = num_topics, method = "Gibbs",
                                    control = list(iter = 100, burnin = 50, thin = 10, seed = 123))
     terminos_por_tema <- topicmodels::terms(modelo_lda, k = 10)
@@ -1341,7 +1466,13 @@ server <- function(input, output, session) {
         if (ext == "rds") {
           df <- readRDS(input$file_upload$datapath)
         } else if (ext == "csv") {
-          df <- read.csv(input$file_upload$datapath, stringsAsFactors = FALSE)
+          # Detectar el delimitador (coma o punto y coma) leyendo la primera línea para evitar lecturas de una sola columna
+          primera_linea <- readLines(input$file_upload$datapath, n = 1)
+          num_comas <- stringr::str_count(primera_linea, ",")
+          num_puntoycomas <- stringr::str_count(primera_linea, ";")
+          sep_char <- if (num_puntoycomas > num_comas) ";" else ","
+          
+          df <- read.csv(input$file_upload$datapath, sep = sep_char, stringsAsFactors = FALSE)
         } else {
           stop("Formato no soportado. Por favor usa .rds o .csv")
         }
@@ -1380,47 +1511,118 @@ server <- function(input, output, session) {
         }
         
         df_limpio <- limpiar_texto(df, columna_texto = col_texto)
+        
+        # Validar que al menos algún comentario contenga texto válido después de la limpieza
+        if (nrow(df_limpio) == 0) {
+          stop("El dataset no contiene ningún comentario con texto válido después de la limpieza. Verifique que la columna de comentarios esté bien identificada y no contenga solo NAs o caracteres vacíos.")
+        }
+        
         rv$dataset_procesado <- df_limpio
         
         # Paso 3: Cálculo de métricas de red (SNA)
         incProgress(0.4, detail = "Calculando métricas de red...")
         col_from <- intersect(names(df_limpio), c("from", "autor", "author", "user"))[1]
         col_to <- intersect(names(df_limpio), c("to", "destinatario", "menciona", "reply_to"))[1]
+        col_parent <- intersect(names(df_limpio), c("parent_id", "reply_to_id", "parent"))[1]
         
-        if (!is.na(col_from) && !is.na(col_to)) {
-          df_edges <- df_limpio |>
-            dplyr::select(all_of(c(col_from, col_to))) |>
-            dplyr::na.omit()
-          if (nrow(df_edges) > 0) {
-            names(df_edges) <- c("from", "to")
-            g <- calcular_sna_metricas(df_edges)
-            rv$grafo_completo <- g
-            
-            # Clasificar roles dinámicamente y guardar en rv$tabla_roles
-            rv$tabla_roles <- g |>
-              tidygraph::activate("nodes") |>
-              dplyr::mutate(
-                in_degree = tidygraph::centrality_degree(mode = "in"),
-                out_degree = tidygraph::centrality_degree(mode = "out"),
-                com_walktrap = tidygraph::group_walktrap()
-              ) |>
-              dplyr::as_tibble() |>
-              dplyr::mutate(
-                Rol = dplyr::case_when(
-                  betweenness > quantile(betweenness, 0.90, na.rm = TRUE) & in_degree < quantile(in_degree, 0.75, na.rm = TRUE) ~ "Broker (Conector)",
-                  pagerank > quantile(pagerank, 0.90, na.rm = TRUE) ~ "Autoridad (Referencia)",
-                  out_degree > quantile(out_degree, 0.90, na.rm = TRUE) ~ "Hub (Difusor activo)",
-                  TRUE ~ "Usuario Regular"
-                ),
-                comunidad = com_walktrap
-              )
-          } else {
-            rv$grafo_completo <- NULL
-            rv$tabla_roles <- NULL
+        # Si no hay columna de destino directa (to) pero hay parent_id, reconstruimos la red conversacional
+        if (is.na(col_to) && !is.na(col_parent) && !is.na(col_from)) {
+          mapeo_padres <- df_limpio |>
+            dplyr::select(comment_id, !!rlang::sym(col_from)) |>
+            dplyr::rename(parent_author = !!rlang::sym(col_from))
+          
+          df_limpio_with_to <- df_limpio |>
+            dplyr::left_join(mapeo_padres, by = c("parent_id" = "comment_id")) |>
+            dplyr::rename(to = parent_author)
+          
+          if ("to" %in% names(df_limpio_with_to)) {
+            col_to <- "to"
+            df_limpio <- df_limpio_with_to
+            rv$dataset_procesado <- df_limpio
           }
+        }
+        
+        df_edges <- data.frame(from = character(0), to = character(0), stringsAsFactors = FALSE)
+        
+        # 1. Intentar red conversacional directa (reply)
+        if (!is.na(col_from) && !is.na(col_to)) {
+          df_edges_direct <- df_limpio |>
+            dplyr::select(all_of(c(col_from, col_to))) |>
+            stats::na.omit()
+          if (nrow(df_edges_direct) > 0) {
+            names(df_edges_direct) <- c("from", "to")
+            df_edges <- df_edges_direct
+          }
+        }
+        
+        # 2. Si la red directa está vacía, intentar construir red de co-participación por post/hilo
+        if (nrow(df_edges) == 0 && !is.na(col_from)) {
+          col_post <- intersect(names(df_limpio), c("post_id", "url", "hilo_id", "thread_id"))[1]
+          if (!is.na(col_post)) {
+            participaciones <- df_limpio |>
+              dplyr::select(!!rlang::sym(col_from), !!rlang::sym(col_post)) |>
+              dplyr::filter(!is.na(.data[[col_from]]) & .data[[col_from]] != "" & .data[[col_from]] != "[deleted]") |>
+              dplyr::distinct()
+            
+            if (nrow(participaciones) > 0) {
+              edges_co <- participaciones |>
+                dplyr::inner_join(participaciones, by = col_post, relationship = "many-to-many") |>
+                dplyr::filter(.data[[paste0(col_from, ".x")]] < .data[[paste0(col_from, ".y")]]) |>
+                dplyr::select(from = paste0(col_from, ".x"), to = paste0(col_from, ".y"))
+              
+              if (nrow(edges_co) > 0) {
+                df_edges <- edges_co
+              }
+            }
+          }
+        }
+        
+        if (nrow(df_edges) > 0) {
+          g <- calcular_sna_metricas(df_edges)
+          
+          # Clasificar roles dinámicamente y guardar en rv$tabla_roles
+          tabla_roles_df <- g |>
+            tidygraph::activate("nodes") |>
+            dplyr::mutate(
+              in_degree = tidygraph::centrality_degree(mode = "in"),
+              out_degree = tidygraph::centrality_degree(mode = "out"),
+              com_walktrap = tidygraph::group_walktrap()
+            ) |>
+            dplyr::as_tibble() |>
+            dplyr::mutate(
+              Rol = dplyr::case_when(
+                betweenness > quantile(betweenness, 0.90, na.rm = TRUE) & in_degree < quantile(in_degree, 0.75, na.rm = TRUE) ~ "Broker (Conector)",
+                pagerank > quantile(pagerank, 0.90, na.rm = TRUE) ~ "Autoridad (Referencia)",
+                out_degree > quantile(out_degree, 0.90, na.rm = TRUE) ~ "Hub (Difusor activo)",
+                TRUE ~ "Usuario Regular"
+              ),
+              comunidad = com_walktrap
+            )
+          
+          rv$tabla_roles <- tabla_roles_df
+          
+          # Unir la columna de Rol de vuelta al grafo para que visNetwork y ggraph la puedan usar
+          g_with_roles <- g |>
+            tidygraph::activate("nodes") |>
+            dplyr::left_join(dplyr::select(tabla_roles_df, name, Rol), by = "name")
+          
+          rv$grafo_completo <- g_with_roles
         } else {
           rv$grafo_completo <- NULL
           rv$tabla_roles <- NULL
+        }
+        
+        # Generar roles por defecto si el dataset no tiene estructura de red de interacciones para no bloquear el FCA
+        if (is.null(rv$tabla_roles) && !is.na(col_from)) {
+          autores_unicos <- unique(df_limpio[[col_from]])
+          rv$tabla_roles <- data.frame(
+            name = autores_unicos,
+            Rol = "Usuario Regular",
+            comunidad = 1,
+            pagerank = 0,
+            betweenness = 0,
+            stringsAsFactors = FALSE
+          )
         }
         
         # Paso 4: Análisis de sentimiento (NRC)
@@ -1455,8 +1657,8 @@ server <- function(input, output, session) {
         
       }, error = function(e) {
         rv$archivo_cargado <- FALSE
-        output$upload_status <- renderText(paste("Error en el procesamiento del archivo:", e$message))
-        showNotification(paste("Error en el procesamiento:", e$message), type = "error", duration = NULL)
+        output$upload_status <- renderText(paste("Error en el procesamiento del archivo:", conditionMessage(e)))
+        showNotification(paste("Error en el procesamiento:", conditionMessage(e)), type = "error", duration = NULL)
         
         # Restaurar todas las opciones de metodología si el archivo falla o se restablece
         updateRadioButtons(session, "sent_metodo",
@@ -1478,6 +1680,105 @@ server <- function(input, output, session) {
                              "Inteligencia Artificial (IA / datos IA)" = "ia"
                            ),
                            selected = "ia")
+      })
+    })
+  })
+  
+  observeEvent(input$topic_recalcular, {
+    # Si no se ha cargado un dataset dinámico, usaremos el dataset por defecto
+    df_limpio <- rv$dataset_procesado
+    
+    if (is.null(df_limpio)) {
+      # Cargar el dataset procesado por defecto según la fuente activa
+      ruta_data_texto <- paste0("data/", fuente_activa, "/data_texto_procesado.rds")
+      if (file.exists(ruta_data_texto)) {
+        df_limpio <- readRDS(ruta_data_texto)
+      } else {
+        showNotification("No se encontró el archivo de texto procesado por defecto.", type = "error")
+        return()
+      }
+    }
+    
+    # Identificar la columna de texto a limpiar/usar
+    col_texto <- intersect(names(df_limpio), c("comment", "comment_id", "body", "text", "comentario", "contenido"))
+    col_texto <- intersect(col_texto, c("comment", "text", "comentario", "body"))[1]
+    if (is.na(col_texto) || is.null(col_texto)) {
+      char_cols <- names(df_limpio)[sapply(df_limpio, is.character)]
+      if (length(char_cols) == 0) {
+        showNotification("No se encontró ninguna columna de texto en el dataset.", type = "error")
+        return()
+      }
+      col_texto <- char_cols[1]
+    }
+    
+    # Crear comment_id si no existe
+    if (!"comment_id" %in% names(df_limpio)) {
+      df_limpio$comment_id <- as.character(seq_len(nrow(df_limpio)))
+    } else {
+      df_limpio$comment_id <- as.character(df_limpio$comment_id)
+    }
+    
+    # Entrenar LDA
+    withProgress(message = "Recalculando tópicos...", value = 0.5, {
+      tryCatch({
+        num_topics <- if (!is.null(input$topic_k_input)) input$topic_k_input else 5
+        lda_results <- entrenar_modelo_lda(df_limpio, columna_texto = col_texto, num_topics = num_topics)
+        
+        rv$dataset_procesado <- df_limpio
+        rv$modelo_lda <- lda_results$modelo
+        rv$términos_tópicos <- lda_results$terminos
+        rv$gamma_matriz <- lda_results$gamma
+        
+        # Recalcular sentimientos si no existen para que FCA tenga datos consistentes alineados
+        if (is.null(rv$matriz_sentimientos)) {
+          sentimientos <- analizar_sentimientos_nrc(df_limpio, columna_texto = col_texto)
+          rv$matriz_sentimientos <- sentimientos
+        }
+        
+        # Generar roles por defecto si no existen
+        if (is.null(rv$tabla_roles)) {
+          col_from <- intersect(names(df_limpio), c("from", "autor", "author", "user"))[1]
+          if (!is.na(col_from)) {
+            autores_unicos <- unique(df_limpio[[col_from]])
+            rv$tabla_roles <- data.frame(
+              name = autores_unicos,
+              Rol = "Usuario Regular",
+              comunidad = 1,
+              pagerank = 0,
+              betweenness = 0,
+              stringsAsFactors = FALSE
+            )
+          } else {
+            autores_unicos <- unique(df_limpio$author)
+            if (is.null(autores_unicos)) autores_unicos <- "Usuario"
+            rv$tabla_roles <- data.frame(
+              name = autores_unicos,
+              Rol = "Usuario Regular",
+              comunidad = 1,
+              pagerank = 0,
+              betweenness = 0,
+              stringsAsFactors = FALSE
+            )
+          }
+        }
+        
+        # Activar el flag para usar variables dinámicas
+        rv$archivo_cargado <- TRUE
+        
+        # Desactivar temporalmente metodologías de IA
+        updateRadioButtons(session, "sent_metodo",
+                           choices = c("Algoritmo clásico (NRC)" = "clasico"),
+                           selected = "clasico")
+        updateRadioButtons(session, "topic_metodo",
+                           choices = c("Algoritmo clásico (LDA)" = "clasico"),
+                           selected = "clasico")
+        updateRadioButtons(session, "fca_metodo",
+                           choices = c("Algoritmo clásico (NRC)" = "clasico"),
+                           selected = "clasico")
+        
+        showNotification(paste("✓ Tópicos recalculados con éxito (K =", num_topics, ")."), type = "message")
+      }, error = function(e) {
+        showNotification(paste("Error al recalcular tópicos:", conditionMessage(e)), type = "error", duration = NULL)
       })
     })
   })
@@ -1515,6 +1816,30 @@ server <- function(input, output, session) {
     )
     tags$p(tags$strong(metodo), style = "color: #555; margin-bottom: 12px;")
   })
+  output$topic_controls_ui <- renderUI({
+    if (isTRUE(rv$archivo_cargado)) {
+      tagList(
+        sliderInput(
+          "topic_k_input",
+          "Número de tópicos (K):",
+          min = 2,
+          max = 15,
+          value = if (!is.null(rv$modelo_lda)) rv$modelo_lda@k else 5,
+          step = 1,
+          width = "100%"
+        ),
+        actionButton(
+          "topic_recalcular",
+          " Recalcular tópicos",
+          icon = icon("sync"),
+          class = "btn-primary",
+          style = "width: 100%; margin-top: -10px;"
+        )
+      )
+    } else {
+      NULL
+    }
+  })
   
   output$topic_names_panel <- renderUI({
     # Cargar nombres de temas clásicos
@@ -1522,11 +1847,11 @@ server <- function(input, output, session) {
       req(rv$modelo_lda)
       clasico_temas <- paste0("Topic ", 1:rv$modelo_lda@k)
     } else {
-      clasico_temas <- tryCatch(readRDS("data/nombres_temas.rds"), error = function(e) paste0("Topic ", 1:6))
+      clasico_temas <- tryCatch(readRDS(paste0("data/", fuente_activa, "/nombres_temas.rds")), error = function(e) paste0("Topic ", 1:6))
     }
     
     # Cargar nombres de temas de IA
-    ia_temas <- tryCatch(readRDS("data/temas_ia_puro.rds"), error = function(e) NULL)
+    ia_temas <- tryCatch(readRDS(paste0("data/", fuente_activa, "/temas_ia_puro.rds")), error = function(e) NULL)
     
     # Crear la lista de temas clásicos en HTML
     clasico_html <- tags$ul(
@@ -1672,7 +1997,7 @@ server <- function(input, output, session) {
           theme(legend.position = "none", strip.text = element_text(size = 7, color = (if(is_light) "#0f172a" else "#cbd5e1")))
       } else if (input$sent_grafico %in% c("sa_plot_camara_eco.png", "sa_plot_camara_eco_ia.png")) {
         # 4. Cámaras de eco por comunidad
-        roles_df <- if (!is.null(rv$tabla_roles)) rv$tabla_roles else readRDS("data/tabla_roles.rds")
+        roles_df <- if (!is.null(rv$tabla_roles)) rv$tabla_roles else tabla_roles
         data_echo <- roles_df |>
           dplyr::inner_join(df_sent, by = c("name" = "author")) |>
           dplyr::select(name, comunidad, valencia)
@@ -1823,7 +2148,7 @@ server <- function(input, output, session) {
   load_grafo_reddit <- function() {
     if (!is.null(grafo_reddit())) return(invisible(TRUE))
     
-    data_sna <- readRDS("data/data_sna.rds")
+    data_sna <- readRDS(paste0("data/", fuente_activa, "/data_sna.rds"))
     data_sna <- dplyr::count(data_sna, from, to, name = "weight")
     
     # 1. Creamos el grafo y calculamos las métricas
@@ -1838,9 +2163,7 @@ server <- function(input, output, session) {
       )
     
     # 2. Le pegamos los roles de tu archivo tabla_roles.rds
-    if (file.exists("data/tabla_roles.rds")) {
-      tabla_roles <- readRDS("data/tabla_roles.rds")
-      
+    if (file.exists(ruta_tabla_roles)) {
       g <- g |>
         tidygraph::activate("nodes") |>
         # Unimos usando el nombre del usuario
@@ -1857,7 +2180,7 @@ server <- function(input, output, session) {
   }
   
   obtener_grafo_activo <- function() {
-    if (rv$archivo_cargado && !is.null(rv$grafo_completo)) {
+    if (rv$archivo_cargado) {
       return(rv$grafo_completo)
     }
     load_grafo_reddit()
@@ -1984,7 +2307,7 @@ server <- function(input, output, session) {
     req(input$sna_run)
     withProgress(message = "Calculando red...", {
       g0 <- obtener_grafo_activo()
-      validate(need(!is.null(g0), "No hay datos de red disponibles."))
+      validate(need(!is.null(g0), "No hay datos de interacciones disponibles para este dataset"))
       
       g1 <- generate_subgraph_advanced(
         umbral_nodos = input$sna_umbral_nodos,
@@ -2008,8 +2331,10 @@ server <- function(input, output, session) {
           id = name,
           label = "",
           title = paste0(
-            "<b>", name, "</b><br>Grado: ", degree, "<br>Betweenness: ", round(betweenness, 3),
-            "<br>Pagerank: ", round(pagerank, 4), "<br>Rol: ", ifelse(is.na(Rol), "N/A", as.character(Rol))
+            "<div style='background:var(--bg-card);color:var(--text-primary);padding:10px 14px;margin:-15px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;line-height:1.5;min-width:180px;'>",
+            "<b style='color:var(--text-primary);'>", name, "</b><br>Grado: ", degree, "<br>Betweenness: ", round(betweenness, 3),
+            "<br>Pagerank: ", round(pagerank, 4), "<br>Rol: ", ifelse(is.na(Rol), "N/A", as.character(Rol)),
+            "</div>"
           ),
           value = pmax(degree, 1),
           color = color_nodos
@@ -2021,7 +2346,11 @@ server <- function(input, output, session) {
         mutate(
           from = nodes$id[from],
           to = nodes$id[to],
-          title = paste0("Peso: ", weight, "<br>De: ", from, "<br>Para: ", to),
+          title = paste0(
+            "<div style='background:var(--bg-card);color:var(--text-primary);padding:10px 14px;margin:-15px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;line-height:1.5;'>",
+            "Peso: ", weight, "<br>De: ", from, "<br>Para: ", to,
+            "</div>"
+          ),
           width = pmax(weight / max(weight, 1) * 5, 1)
         )
       
@@ -2289,13 +2618,13 @@ server <- function(input, output, session) {
         df_temas$comment_id <- rv$dataset_procesado$comment_id
       }
     } else {
-      modelo_lda <- readRDS("data/modelo_lda.rds") 
-      tabla_roles <- readRDS("data/tabla_roles.rds")
-      data_texto <- readRDS("data/data_texto_procesado.rds")
+      modelo_lda <- readRDS(paste0("data/", fuente_activa, "/modelo_lda.rds")) 
+      tabla_roles <- tabla_roles
+      data_texto <- readRDS(paste0("data/", fuente_activa, "/data_texto_procesado.rds"))
       use_ia_data <- identical(input$fca_metodo, "ia")
-      data_sentim <- if (use_ia_data) readRDS("data/data_sentim_ia.rds") else readRDS("data/data_sentim.rds")
-      nombres_temas <- readRDS("data/nombres_temas.rds")
-      df_temas <- as.data.frame(readRDS("data/df_temas_ia.rds"), stringsAsFactors = FALSE, check.names = FALSE)
+      data_sentim <- if (use_ia_data) data_sentim else readRDS(paste0("data/", fuente_activa, "/data_sentim.rds"))
+      nombres_temas <- readRDS(paste0("data/", fuente_activa, "/nombres_temas.rds"))
+      df_temas <- df_temas
     }
     
     if ("name" %in% names(tabla_roles) && !"Usuario" %in% names(tabla_roles)) tabla_roles$Usuario <- tabla_roles$name
@@ -2305,6 +2634,18 @@ server <- function(input, output, session) {
       inner_join(df_temas, by = "comment_id") |> 
       left_join(tabla_roles, by = c("author" = "name")) |>
       filter(!is.na(Rol))
+    
+    # Validar que el conjunto integrado no esté vacío para evitar errores o caídas en los cálculos posteriores
+    if (is.null(df_integrado) || nrow(df_integrado) == 0) {
+      stop("El conjunto de datos integrado para FCA está vacío. Por favor, asegúrese de que el dataset contiene los mismos identificadores de autor y comentario que los demás análisis.")
+    }
+    
+    # Limitar el tamaño de la matriz FCA para evitar consumo excesivo de memoria y evitar caídas (crashes) de R con datasets grandes
+    if (nrow(df_integrado) > 500) {
+      df_integrado <- df_integrado |>
+        dplyr::arrange(desc(score)) |>
+        dplyr::slice_head(n = 500)
+    }
     
     # 2. Detección automática de temas y comunidades
     nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
@@ -2942,7 +3283,11 @@ paleta_border <- colorRampPalette(c("#ee5253", "#ff9f43", "#10ac84", "#2e86de"))
 
 nodes$color.background <- paleta_bg[num_atributos + 1]
 nodes$color.border <- paleta_border[num_atributos + 1]
-nodes$title <- paste0("Concepto ", ord, " (", num_atributos, " atributos, ", soportes_reales[ord], " objetos)")
+nodes$title <- paste0(
+  "<div style='background:var(--bg-card);color:var(--text-primary);padding:10px 14px;margin:-15px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;line-height:1.5;'>",
+  "Concepto ", ord, " (", num_atributos, " atributos, ", soportes_reales[ord], " objetos)",
+  "</div>"
+)
 
 edges_list <- list()
 
