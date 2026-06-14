@@ -21,8 +21,9 @@ Se configuran las dependencias del entorno y se establece una estrategia de para
 ```{r}
 #| warning: false
 library(tidyverse)
+library(stringr)
 library(tidytext)
-library(topicmodels) #LDA
+library(topicmodels) 
 library(ldatuning)
 library(tm)
 library(textstem)
@@ -34,8 +35,6 @@ library(servr)
 library(patchwork) 
 library(future)
 library(furrr)
-
-# Carga de librerías necesarias para llamadas a API
 library(httr2)
 library(jsonlite)
 
@@ -44,20 +43,16 @@ plan(multisession, workers = 12)
 # Selector de fuente de datos ("reddit" o "kaggle")
 fuente_activa <- "kaggle" 
 
-# Construcción dinámica de la ruta
 ruta_dtm_lda <- paste0("data/", fuente_activa, "/dtm_lda.rds")
 ruta_data_texto <- paste0("data/", fuente_activa, "/data_texto_procesado.rds")
 
-# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
 dtm_lda <- readRDS(ruta_dtm_lda)
 data_texto <- readRDS(ruta_data_texto)
 
 ```
 
 ```{r}
-# ==============================================================================
-# FILTRADO INTELIGENTE DE ESCALABILIDAD (Big Data vs. Muestra)
-# ==============================================================================
+# FILTRADO  DE ESCALABILIDAD (Big Data vs. Muestra)
 umbral_masivo <- 10000 # Consideramos "Big Data" si tiene más de 10k comentarios
 
 if (nrow(data_texto) > umbral_masivo) {
@@ -89,10 +84,12 @@ if (nrow(data_texto) > umbral_masivo) {
 Se despliega un pipeline de limpieza morfológica y léxica. Incluye la tokenización, la eliminación de stopwords (estándar y del dominio específico) y la lematización. Para asegurar la calidad de la Matriz Documento-Término (DTM) dispersa, se aplica un filtro estadístico TF-IDF inicial que purga el ruido de fondo eliminando términos con una relevancia inferior a $0.01$.
 
 ```{r}
+# Añadir stopwords de dominio si se desea
 stopwords_dominio <- tibble(
   # word = c("crypto", "bitcoin", "money", "people") # palabras "genéricas"
   word = c("")
 )
+
 # Tokenización y limpieza básica
 text_tokens <- data_texto |>
   unnest_tokens(word, comment) |>
@@ -101,25 +98,22 @@ text_tokens <- data_texto |>
   filter(nchar(word) > 2) |>
   mutate(word = textstem::lemmatize_words(word))
 
-# Calcular TF-IDF para filtrar ruido matemáticamente
+# Calculamos TF-IDF para filtrar ruido matemáticamente
 text_tfidf <- text_tokens |>
   count(comment_id, word) |>
   bind_tf_idf(word, comment_id, n) |>
-  # Filtramos palabras demasiado comunes (ajusta el 0.01 si es necesario)
+  # Filtramos palabras comunes 
   filter(tf_idf > 0.01) 
 
-# Reconstruir la matriz DTM
+# Reconstruimos la matriz DTM
 dtm_lda_limpio <- text_tfidf |>
   cast_dtm(comment_id, word, n)
 
-# Eliminar documentos vacíos
+# Eliminamos documentos vacíos
 row_totals <- apply(dtm_lda_limpio, 1, sum)
 dtm_lda_limpio <- dtm_lda_limpio[row_totals > 0, ]
 ```
 
-
-```{r}
-```
 
 
 # Optimización de hiperparámetros: determinación de k
@@ -147,10 +141,10 @@ resultados_tuning <- FindTopicsNumber(
   mc.cores = 2
 )
 
-# Mostramos la tabla con los valores exactos
+#  tabla con los valores exactos
 resultados_tuning
 
-# Generamos el gráfico para decidir visualmente
+#  gráfico para decidir visualmente
 FindTopicsNumber_plot(resultados_tuning)
 ```
 
@@ -173,13 +167,10 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
   micro_temas_limpios <- readRDS(ruta_micro_temas)
   
 } else {
-# ==============================================================================
 # 1. HILO ASÍNCRONO: Entrenamiento del LDA Clásico
-# ==============================================================================
   cat("Lanzando entrenamiento del modelo LDA en segundo plano...\n")
   
   hilo_lda <- future::future({
-    # Esto se ejecutará de forma invisible sin bloquear la consola
     modelo <- LDA(dtm_lda_limpio, k = 6, control = list(seed = 123))
     saveRDS(modelo, ruta_lda)
     
@@ -191,9 +182,8 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
       collapse = "\n"
     )
     
-    # 1.3 Prompt para nombrar temas
     prompt_unico <- paste(
-      "You are an expert data analyst specializing in Reddit financial discussions.",
+      "You are an expert data analyst specializing in Reddit.",
       "Below are 6 groups of keywords extracted from a dataset via LDA topic modeling.",
       "Your task is to assign a single, concise name (maximum 4 words) in ENGLISH to each topic.",
       "CRITICAL RULE: Each name must be completely UNIQUE and accurately distinguish one topic from another.",
@@ -203,7 +193,6 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
       sep = "\n"
     )
     
-    # 1.4 Petición a Ollama
     respuesta_batch <- request("http://localhost:11434/v1/chat/completions") |>
       req_body_json(list(
         model = "llama3.1", 
@@ -212,7 +201,6 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
       )) |>
       req_perform()
     
-    # 1.5 Limpieza de la respuesta
     resultado_texto <- resp_body_json(respuesta_batch)$choices[[1]]$message$content
     nombres_ia <- str_split(resultado_texto, "\n")[[1]] |> 
       str_remove("^[0-9].\\s*") |> 
@@ -220,16 +208,14 @@ if (file.exists(ruta_lda) && file.exists(ruta_nombres_lda) && file.exists(ruta_m
       keep(~ .x != "")
     
     nombres_temas <- setNames(nombres_ia, as.character(1:6))
-    saveRDS(nombres_temas, ruta_nombres_lda) # Guardamos los nombres del LDA
+    saveRDS(nombres_temas, ruta_nombres_lda) 
     
     # Devolvemos una lista con el modelo y los nombres
     list(modelo = modelo, nombres = nombres_temas)
   }, seed = TRUE)
 
 
-# ==============================================================================
 # 2. HILOS PARALELOS (MAP): Extracción de micro-temas con Ollama
-# ==============================================================================
 cat("Iniciando Fase MAP (IA) de forma simultánea...\n")
 
 tamano_lote <- 150
@@ -340,7 +326,6 @@ if (file.exists(ruta_macro_temas)) {
   
   temas_ia_puro <- stringr::str_match_all(resultado_macro_temas, "\\*\\*(.*?)\\*\\*")[[1]][,2]
     
-    # Guardamos el vector resultante en la carpeta data
   saveRDS(temas_ia_puro, ruta_macro_temas)
   cat("\nMacro-temas guardados exitosamente en:", ruta_macro_temas, "\n")
 }
@@ -379,10 +364,10 @@ plot_prevalencia <- ggplot(prevalencia, aes(x = factor(topic_name), y = promedio
   coord_flip() +
   theme_minimal() +
   labs(x=NULL, y="Gamma promedio")
-  #+ labs(title = "Prevalencia de Temas",
-  #      subtitle = "Peso relativo de cada tópico en el conjunto de comentarios",
-  #      x = "Tópico",
-  #      y = "Probabilidad media (Gamma)")
+  + labs(title = "Prevalencia de Temas",
+       subtitle = "Peso relativo de cada tópico en el conjunto de comentarios",
+       x = "Tópico",
+       y = "Probabilidad media (Gamma)")
 ```
 
 
@@ -390,7 +375,7 @@ plot_prevalencia <- ggplot(prevalencia, aes(x = factor(topic_name), y = promedio
 ```{r}
 # Calculamos el impacto real ponderado
 impacto_real <- tidy(modelo_lda, matrix = "gamma") |>
-  # Unimos con los datos originales. Asegúrate de que 'comment_id' es tu ID.
+  # Unimos con los datos originales
   inner_join(data_texto, by = c("document" = "comment_id")) |>
   # Multiplicamos el score por la probabilidad del tópico en ese comentario
   mutate(score_ponderado = gamma * score,
@@ -398,17 +383,16 @@ impacto_real <- tidy(modelo_lda, matrix = "gamma") |>
   group_by(topic_name) |>
   summarise(impacto_total = sum(score_ponderado, na.rm = TRUE))
 
-# Graficamos el resultado real
 plot_impacto <- ggplot(impacto_real, aes(x = factor(topic_name), y = impacto_total, fill = factor(topic_name))) +
   geom_col(show.legend = FALSE) +
   coord_flip() +
   theme_minimal() + 
   labs(x=NULL, y = "Impacto total")
-  
-  # + labs(title = "Impacto Social por Tópico (Score Ponderado)",
-  #      subtitle = "Suma de votos ajustada por la relevancia de cada tema",
-  #      x = "Tópico", 
-  #      y = "Votos Totales Ponderados")
+
+  + labs(title = "Impacto Social por Tópico (Score Ponderado)",
+       subtitle = "Suma de votos ajustada por la relevancia de cada tema",
+       x = "Tópico",
+       y = "Votos Totales Ponderados")
 ```
 
 
@@ -426,16 +410,6 @@ ggsave("images/tm_plot_prevalencia_impacto.png", plot_prevalencia_impacto, dpi =
 Se sustituye la clasificación determinista por una inferencia continua (Soft Labeling). Mediante Prompt Engineering estricto, se fuerza a la red neuronal a comportarse como un clasificador probabilístico que devuelve objetos JSON. La IA evalúa semánticamente el documento y reparte una masa de probabilidad del $100\%$ entre los macro-temas disponibles, capturando la interseccionalidad del discurso.
 
 ```{r}
-
-# temas_ia_puro <- c("Cryptocurrency Criticism", 
-#                    "Blockchain Technology", 
-#                    "Investment and Scams", 
-#                    "Price Fluctuations", 
-#                    "Crypto Exchange Mistakes", 
-#                    "Illicit Activities", 
-#                    "Market Analysis", 
-#                    "Technology Integration")
-
 temas_ia_puro <- stringr::str_match_all(resultado_macro_temas, "\\*\\*(.*?)\\*\\*")[[1]][, 2]
 
 # Comprobamos el resultado
@@ -519,6 +493,7 @@ if (file.exists(ruta_analisis_ia)) {
   
   saveRDS(datos_analisis_ia, ruta_analisis_ia)
   
+  # descomentar si se quiere eliminar el backup
   # if (file.exists(ruta_analisis_ia_backup)) {
   #   file.remove(ruta_analisis_ia_backup)
   # }
@@ -533,7 +508,6 @@ Se realiza un proceso ETL (Extract, Transform, Load) sobre las inferencias del L
 ```{r}
 cat("Procesando y normalizando las distribuciones de probabilidad de la IA...\n")
 
-# Desanidamos los JSON para crear un dataframe largo (estilo tidy)
 gamma_ia_sintetico <- datos_analisis_ia |>
   filter(!is.na(distribucion_ia)) |>
   mutate(
@@ -551,24 +525,20 @@ gamma_ia_sintetico <- datos_analisis_ia |>
   ) |>
   # Sustituimos posibles NAs por 0
   mutate(probabilidad_bruta = replace_na(as.numeric(probabilidad_bruta), 0)) |>
-  # Normalizamos (por si la IA sumó mal, aseguramos que la suma por comentario sea 1.0)
+  # Normalizamos 
   group_by(comment_id) |>
   mutate(gamma_ia = probabilidad_bruta / sum(probabilidad_bruta)) |>
   ungroup() |>
   # Limpiamos valores problemáticos si algún comentario sumaba 0 total
   filter(!is.nan(gamma_ia))
 
-# Echemos un vistazo al resultado
 head(gamma_ia_sintetico)
 ```
 
 ```{r}
-# =========================================================================
 # PREPARACIÓN Y EXPORTACIÓN PARA FCA
-# =========================================================================
 
-# 1. Transformamos de vuelta a formato "ancho" (una columna por tema)
-# Esto es vital para que se integre en tu script de FCA sin romper nada
+# Transformamos de vuelta a formato de una columna por tema
 df_temas_ia <- gamma_ia_sintetico |>
   select(comment_id, tema_ia, gamma_ia) |>
   pivot_wider(
@@ -580,7 +550,6 @@ df_temas_ia <- gamma_ia_sintetico |>
 
 saveRDS(df_temas_ia, file = paste0("data/", fuente_activa, "/df_temas_ia.rds"))
 
-# (Opcional) Guardamos también tu versión larga por si la necesitas para hacer gráficas de barras/sectores en tu memoria
 saveRDS(gamma_ia_sintetico, file = paste0("data/", fuente_activa, "/gamma_ia_sintetico.rds"))
 
 cat("\n[INFO] Matriz de temas de la IA guardada.\n")
@@ -590,7 +559,8 @@ cat("\n[INFO] Matriz de temas de la IA guardada.\n")
 Al disponer de una distribución Gamma sintética por parte de la IA, el cálculo volumétrico se iguala al del modelo probabilístico. La prevalencia temática emerge de la media de las probabilidades inferidas, mientras que el impacto se obtiene sumando los scores ponderados por dicha probabilidad, permitiendo una comparativa directa, simétrica y justa entre ambos motores algorítmicos.
 
 ```{r}
-# --- GRÁFICO 1: PREVALENCIA (Volumen IA) ---
+# PREVALENCIA (Volumen IA) 
+
 # Como ahora tenemos probabilidades (Soft Labels), la prevalencia es la media de gamma_ia
 prevalencia_ia <- gamma_ia_sintetico |>
   group_by(tema_ia) |>
@@ -603,9 +573,9 @@ plot_prevalencia_ia <- ggplot(prevalencia_ia, aes(x = reorder(tema_ia, promedio_
   scale_fill_viridis_d(option = "mako") +
   theme_minimal() +
   labs(x= NULL)
-  # labs(title = "Prevalencia (IA Generativa Soft Labels)", x = NULL, y = "Gamma Promedio")
+  labs(title = "Prevalencia (IA Generativa Soft Labels)", x = NULL, y = "Gamma Promedio")
 
-# --- GRÁFICO 2: IMPACTO SOCIAL (Scores ponderados IA) ---
+# IMPACTO SOCIAL (Scores ponderados IA) 
 # Multiplicamos el score del comentario por la probabilidad (gamma_ia) del tema
 impacto_ia <- gamma_ia_sintetico |>
   mutate(score_ponderado = gamma_ia * score) |>
@@ -619,48 +589,13 @@ plot_impacto_ia <- ggplot(impacto_ia, aes(x = reorder(tema_ia, impacto_total), y
   scale_fill_viridis_d(option = "rocket") +
   theme_minimal() +
   labs(x= NULL)
-  # labs(title = "Impacto Social (IA Generativa Soft Labels)", x = NULL, y = "Votos Totales Ponderados")
+  labs(title = "Impacto Social (IA Generativa Soft Labels)", x = NULL, y = "Votos Totales Ponderados")
 
-# Mostramos los gráficos juntos usando patchwork
 plot_prevalencia_impacto_ia <- plot_prevalencia_ia / plot_impacto_ia
 print(plot_prevalencia_impacto_ia)
 
 ggsave("images/tm_plot_prevalencia_impacto_ia.png", plot_prevalencia_impacto_ia, dpi = 300)
 ```
-
-
-
-
-```{r}
-# --- GRÁFICO 1: PREVALENCIA (Volumen) ---
-# prevalencia_ia <- datos_analisis_ia |>
-#   count(tema_ia) |>
-#   mutate(porcentaje = n / sum(n) * 100)
-# 
-# p1 <- ggplot(prevalencia_ia, aes(x = reorder(tema_ia, porcentaje), y = porcentaje, fill = tema_ia)) +
-#   geom_col(show.legend = FALSE) +
-#   coord_flip() +
-#   scale_fill_viridis_d(option = "rocket") +
-#   theme_minimal() +
-#   labs(title = "Prevalencia Temática (IA Generativa)", x = NULL, y = "Porcentaje de Comentarios (%)")
-# 
-# # --- GRÁFICO 2: IMPACTO SOCIAL (Scores) ---
-# impacto_ia <- datos_analisis_ia |>
-#   group_by(tema_ia) |>
-#   summarise(impacto_total = sum(score, na.rm = TRUE)) # Suma directa, sin multiplicar por Gamma
-# 
-# p2 <- ggplot(impacto_ia, aes(x = reorder(tema_ia, impacto_total), y = impacto_total, fill = tema_ia)) +
-#   geom_col(show.legend = FALSE) +
-#   coord_flip() +
-#   scale_fill_viridis_d(option = "mako") +
-#   theme_minimal() +
-#   labs(title = "Impacto Social por Tópico (IA Generativa)", x = NULL, y = "Suma Total de Votos")
-# 
-# # Mostramos los gráficos juntos
-# p1 / p2
-```
-
-
 
 
 
@@ -684,8 +619,8 @@ plot_top_terms <- ggplot(top_terms, aes(x = beta, y = term, fill = factor(topic)
   scale_fill_viridis_d(option = "plasma") +
   theme_minimal(base_size = 10) +
   theme(
-    axis.text.y = element_text(size = 6),  # <--- Esto hace las letras más pequeñas
-    strip.text = element_text(face = "bold") # (Opcional) Títulos de facetas en negrita
+    axis.text.y = element_text(size = 6),  
+    strip.text = element_text(face = "bold") 
   ) +
   labs(
     x = "Probabilidad Beta",
@@ -697,19 +632,18 @@ print(plot_top_terms)
 ggsave("images/tm_plot_top_terms.png", plot_top_terms, dpi = 300)
 
 ```
+
 ##Equivalente al gráfico beta
 
 ```{r}
-library(stringr)
-
-# 1. Tokenizamos, aplicamos REGEX y contamos palabras por CADA COMENTARIO
+# Tokenizamos, aplicamos REGEX y contamos palabras por CADA COMENTARIO
 tokens_por_comentario <- datos_analisis_ia |>
   # Filtramos usando la columna correcta del Soft Labeling
   filter(!is.na(distribucion_ia)) |> 
   unnest_tokens(word, comment) |>
-  # =================================================================
-  # FILTROS REGEX (Expresiones Regulares para cazar basura)
-  # =================================================================
+
+  # Filtros de expresiones regulares 
+
   filter(
     !str_detect(word, "^http|^www\\.|\\.com$|\\.org$|\\.net$"), # Fuera URLs y dominios
     !str_detect(word, "\\d"),                                   # Fuera números (000015, 133...)
@@ -720,16 +654,15 @@ tokens_por_comentario <- datos_analisis_ia |>
   anti_join(stop_words, by = "word") |>
   anti_join(stopwords_dominio, by = "word") |>
   mutate(word = textstem::lemmatize_words(word)) |>
-  # =================================================================
+  
   # FILTRO DE FRECUENCIA MÍNIMA GLOBAL
-  # =================================================================
   group_by(word) |>
   filter(n() >= 3) |> # La palabra debe aparecer al menos 3 veces en toda la muestra
   ungroup() |>
   # Ahora contamos cuántas veces aparece cada palabra limpia en cada comentario
   count(comment_id, word) 
 
-# 2. Cruzamos con las probabilidades de la IA y calculamos la frecuencia ponderada
+# Cruzamos con las probabilidades de la IA y calculamos la frecuencia ponderada
 frecuencia_ponderada_ia <- tokens_por_comentario |>
   inner_join(gamma_ia_sintetico, by = "comment_id", relationship = "many-to-many") |>
   mutate(n_ponderado = n * gamma_ia) |>
@@ -737,7 +670,7 @@ frecuencia_ponderada_ia <- tokens_por_comentario |>
   summarise(n_total = sum(n_ponderado), .groups = "drop") |>
   filter(n_total > 0.01)
 
-# 3. Calculamos el c-TF-IDF usando el conteo ponderado
+# Calculamos el c-TF-IDF usando el conteo ponderado
 ctfidf_ia <- frecuencia_ponderada_ia |>
   bind_tf_idf(word, tema_ia, n_total) |>
   group_by(tema_ia) |>
@@ -745,7 +678,7 @@ ctfidf_ia <- frecuencia_ponderada_ia |>
   ungroup() |>
   mutate(word = reorder_within(word, tf_idf, tema_ia))
 
-# 4. Dibujamos el equivalente al gráfico Beta
+# Dibujamos el equivalente al gráfico Beta
 plot_top_terms_ia <- ggplot(ctfidf_ia, aes(x = tf_idf, y = word, fill = tema_ia)) +
   geom_col(show.legend = FALSE, alpha = 0.8) +
   facet_wrap(~ tema_ia, scales = "free_y", ncol = 2) +
@@ -787,7 +720,6 @@ plot_red_coocurrencia <- ggraph(grafo, layout = "fr") +
 
 print(plot_red_coocurrencia)
 
-# Guardamos el gráfico como en los pasos anteriores
 ggsave("images/tm_plot_red_coocurrencia.png", plot_red_coocurrencia, dpi = 300)
 
 ```
@@ -797,12 +729,9 @@ Proyectamos estas relaciones en un grafo de red. Las aristas más gruesas y oscu
 
 
 ```{r}
-# ==============================================================================
 # RED DE CO-OCURRENCIA DE LA IA (Basada en probabilidad Gamma Sintética)
-# ==============================================================================
 
-# Ahora calculamos la correlación cruzando temas dentro del mismo documento,
-# usando el porcentaje de probabilidad (gamma_ia) como peso.
+# Ahora calculamos la correlación cruzando temas dentro del mismo documento, usando el porcentaje de probabilidad (gamma_ia) como peso.
 correlacion_ia <- gamma_ia_sintetico |>
   widyr::pairwise_cor(item = tema_ia, feature = comment_id, value = gamma_ia) |>
   arrange(desc(correlation))
@@ -822,7 +751,6 @@ plot_red_coocurrencia_ia <- ggraph(grafo_ia, layout = "fr") +
 
 print(plot_red_coocurrencia_ia)
 
-# Guardamos el gráfico como en los pasos anteriores
 ggsave("images/tm_plot_red_coocurrencia_ia.png", plot_red_coocurrencia_ia, dpi = 300)
 ```
 

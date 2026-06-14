@@ -28,12 +28,10 @@ library(rlang)
 # Selector de fuente de datos ("reddit" o "kaggle")
 fuente_activa <- "kaggle" 
 
-# Construcción dinámica de la ruta
 ruta_tabla_roles <- paste0("data/", fuente_activa, "/tabla_roles.rds")
 ruta_data_sentim <- paste0("data/", fuente_activa, "/data_sentim_ia.rds")
 ruta_df_temas <- paste0("data/", fuente_activa, "/df_temas_ia.rds")
 
-# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
 tabla_roles <- readRDS(ruta_tabla_roles)
 data_sentim <- readRDS(ruta_data_sentim)
 df_temas <- readRDS(ruta_df_temas)
@@ -53,8 +51,7 @@ En esta fase, unificamos las tres dimensiones de nuestro análisis (modelado de 
 - Temas (LDA): Se asigna un 1 si la probabilidad de que el comentario pertenezca a un tema supera el 15%.
 
 ```{r}
-# 2. Unificar los tres datasets
-# ========== DETECCIÓN AUTOMÁTICA DE TEMAS Y COMUNIDADES ==========
+# Unificar los tres datasets
 # Detectar automáticamente los nombres de los temas (excluyendo comment_id)
 nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
 
@@ -62,7 +59,7 @@ nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
 nombres_temas_limpios <- gsub("\\s+", "_", nombres_temas_automaticos)
 
 df_integrado <- data_sentim |>
-  # Cruzamos con los temas (nos quedamos con los 700 que tienen tema)
+  # Cruzamos con los temas 
   inner_join(df_temas, by = "comment_id") |> 
   # Cruzamos con las métricas de red del autor
   left_join(tabla_roles, by = c("author" = "name")) |>
@@ -78,7 +75,7 @@ comunidades_list <- as.character(1:num_comunidades)
 Este es el bloque de transformación más crítico. Primero, se calculan los umbrales estadísticos (cuartiles Q1 y Q3) para segmentar las variables continuas de red (PageRank, intermediación e impacto) en categorías discretas (alto, medio, bajo). Mediante operaciones de mutación, se aplica One-Hot Encoding para convertir todas las variables (roles, comunidades, sentimientos, emociones primarias y temas) en atributos estrictamente binarios (1 o 0). Finalmente, el conjunto se purga dejando únicamente las columnas binarizadas y se transforma en una estructura de matriz matemática nativa, requisito indispensable para el análisis formal.
 
 ```{r}
-# 1. Calcular umbrales (Q1 = 25% más bajo, Q3 = 25% más alto)
+# Calculamos umbrales (Q1 = 25% más bajo, Q3 = 25% más alto)
 # Influencia (PageRank)
 q1_influencia <- quantile(df_integrado$pagerank, 0.25, na.rm = TRUE)
 q3_influencia <- quantile(df_integrado$pagerank, 0.75, na.rm = TRUE)
@@ -91,14 +88,14 @@ q3_intermediacion <- quantile(df_integrado$betweenness, 0.75, na.rm = TRUE)
 q1_engagement <- quantile(df_integrado$score, 0.25, na.rm = TRUE)
 q3_engagement <- quantile(df_integrado$score, 0.75, na.rm = TRUE)
 
-# 2. Binarizar el dataframe con la nueva granularidad
-# Construir mutaciones de comunidades dinámicamente
+
+# Construimos atributos de comunidades dinámicamente
 mutaciones_comunidades <- map_dfc(comunidades_list, ~{
   col_name <- paste0("Autor_Comunidad_", .x)
   tibble(!!col_name := as.integer(df_integrado$comunidad == .x))
 })
 
-# Construir mutaciones de temas dinámicamente
+# Construimos atributos de temas dinámicamente
 mutaciones_temas <- map_dfc(seq_along(nombres_temas_automaticos), ~{
   tema_original <- nombres_temas_automaticos[.x]
   tema_limpio <- nombres_temas_limpios[.x]
@@ -108,7 +105,7 @@ mutaciones_temas <- map_dfc(seq_along(nombres_temas_automaticos), ~{
 
 df_fca <- df_integrado |>
   mutate(
-    # --- A. ATRIBUTOS DE RED (Autor) ---
+    # A. ATRIBUTOS DE RED (Autor)
     # Influencia (PageRank)
     Autor_Alta_Influencia  = ifelse(pagerank >= q3_influencia, 1, 0),
     Autor_Media_Influencia = ifelse(pagerank > q1_influencia & pagerank < q3_influencia, 1, 0),
@@ -125,7 +122,7 @@ df_fca <- df_integrado |>
     Autor_Rol_Autoridad = ifelse(Rol == "Autoridad (Referencia)", 1, 0),
     Autor_Rol_Hub = ifelse(Rol == "Hub (Difusor activo)", 1, 0),
     
-    # --- B. ATRIBUTOS DE ENGAGEMENT Y SENTIMIENTO (Comentario) ---
+    # B. ATRIBUTOS DE ENGAGEMENT Y SENTIMIENTO (Comentario) 
     # Impacto (Score)
     Coment_Alto_Impacto  = ifelse(score >= q3_engagement, 1, 0),
     Coment_Medio_Impacto = ifelse(score > q1_engagement & score < q3_engagement, 1, 0),
@@ -151,7 +148,7 @@ df_fca <- df_integrado |>
   bind_cols(mutaciones_comunidades) |>
   bind_cols(mutaciones_temas)
 
-# 3. Limpiar la matriz final (Seleccionar dinámicamente: atributos base + comunidades generadas + temas generados)
+# Limpiamos la matriz final (Seleccionar dinámicamente: atributos base + comunidades generadas + temas generados)
 nombres_comunidades <- paste0("Autor_Comunidad_", comunidades_list)
 nombres_temas_atributos <- paste0("Tema_", nombres_temas_limpios)
 
@@ -170,7 +167,7 @@ cols_a_seleccionar <- c(
 matriz_fca_limpia <- df_fca |>
   select(all_of(cols_a_seleccionar))
 
-# Asignar el comment_id como nombre de fila
+# Asignamos el comment_id como nombre de fila
 rownames(matriz_fca_limpia) <- make.unique(as.character(df_fca$comment_id))
 
 matriz_fca_limpia[is.na(matriz_fca_limpia)] <- 0
@@ -221,19 +218,18 @@ Filtro de Soporte: Nos quedamos únicamente con las reglas que tienen un soporte
 Traducción Semántica: Convertimos estas reglas lógicas a texto plano y las enviamos a un LLM. La IA actúa como un puente semántico, traduciendo la sintaxis formal a conclusiones legibles sobre dinámicas de la red social.
 
 ```{r}
-# 1. Extraer las reglas y filtrarlas
+# Extraer las reglas y filtrarlas
 indices <- which(fc$implications$support() > 0.1)
 
-# 2. Creamos el subconjunto de reglas usando esos índices
+# Creamos el subconjunto de reglas usando esos índices
 reglas_filtradas <- fc$implications[indices]
 
 cat(length(indices)," implicaciones")
 
-# Convertir las reglas a un formato de texto legible
+# Convertimos las reglas a un formato de texto legible
 texto_reglas <- capture.output(print(reglas_filtradas))
 texto_reglas_unificado <- paste(texto_reglas, collapse = "\n")
 
-# 2. Configurar el Prompt
 prompt_fca <- paste(
   "Eres un experto en Análisis de Redes Sociales y Psicología de Masas.",
   "He realizado un Análisis de Conceptos Formales (FCA) sobre datos de Reddit.",
@@ -245,8 +241,7 @@ prompt_fca <- paste(
   texto_reglas_unificado
 )
 
-# 3. Llamada a la API LOCAL de Ollama
-# El endpoint por defecto de Ollama cuando corre en tu máquina es el puerto 11434
+# Llamada a la API LOCAL de Ollama
 respuesta_fca <- request("http://localhost:11434/api/chat") |>
   req_body_json(list(
     model = "qwen2.5", 
@@ -256,11 +251,11 @@ respuesta_fca <- request("http://localhost:11434/api/chat") |>
       temperature = 0.5
     )
   )) |>
-  # Aumentamos el timeout a 5 minutos por si tu ordenador tarda en generar la respuesta
+  # Aumentamos el timeout a 5 minutos 
   req_timeout(300) |> 
   req_perform()
 
-# 4. Procesar y ver el resultado
+# Procesar y ver el resultado
 interpretacion_fca_imp <- resp_body_json(respuesta_fca)$message$content
 
 cat("\n--- INTERPRETACIÓN CON QWEN (LOCAL) ---\n")
@@ -270,7 +265,6 @@ cat(interpretacion_fca_imp)
 
 Para garantizar la reproducibilidad del experimento y la auditabilidad de las inferencias generadas por el LLM, se implementó un módulo de persistencia de datos. El sistema captura la salida estructurada de la red neuronal y la serializa en documentos físicos de marcado ligero (Markdown), inyectando marcas de tiempo (timestamps) en la nomenclatura. Esta decisión arquitectónica asegura el aislamiento temporal de cada ejecución y facilita la posterior integración de las conclusiones en la capa de presentación del sistema.
 ```{r}
-# Guardar la respuesta en un archivo Markdown con la fecha
 fecha_actual <- format(Sys.time(), "%Y%m%d_%H%M")
 nombre_archivo <- paste0("data/Analisis_Implicaciones_IA_", fecha_actual, ".md")
 
@@ -291,34 +285,28 @@ Decodificación de intensiones: Traducción automatizada de la matriz binaria a 
 Estructuración tabular: Agrupación y ordenación de los resultados en dataframes de alta cohesión. Esta estructura intermedia actúa como una capa de abstracción matemática, esencial para alimentar de forma eficiente tanto a la interfaz gráfica de usuario final como al motor de inferencia neuronal posterior.
 
 ```{r}
-# 1. Obtener el soporte (porcentaje matemático) de cada concepto
+# Obtenemos el soporte 
 soportes <- fc$concepts$support()
 
-# 2. Extraer las intensiones (la matriz de 0 y 1)
+# Extraer las intensiones 
 matriz_intensiones <- as.matrix(fc$concepts$intents())
 
-# ¡EL FIX! Cogemos los nombres directamente de tu matriz limpia original
 nombres_atributos <- colnames(matriz_fca_final)
 
 # Convertir la columna de 0 y 1 a texto legible
 intensiones_texto <- apply(matriz_intensiones, 2, function(columna) {
-  # Cogemos los nombres de los atributos que tienen un 1 (o > 0)
   atributos_activos <- nombres_atributos[columna > 0]
   paste(atributos_activos, collapse = " + ")
 })
 
-# 3. Construir el Dataframe definitivo para tu TFG
 tabla_conceptos <- data.frame(
   ID_Concepto = 1:length(soportes),
-  # ¡EL FIX! Usamos round() para no tener decimales en los comentarios
   Num_Comentarios = round(soportes * nrow(matriz_fca_final)), 
   Atributos_Compartidos = intensiones_texto
 )
 
-# 4. Ordenar de los más grandes a los más pequeños
 tabla_conceptos <- tabla_conceptos[order(-tabla_conceptos$Num_Comentarios), ]
 
-# 5. Echar un vistazo a los 10 perfiles más grandes
 head(tabla_conceptos, 10)
 ```
 
@@ -335,7 +323,6 @@ resumen_atributos <- data.frame(
   Porcentaje = round((colSums(matriz_fca_final) / nrow(matriz_fca_final)) * 100, 1)
 )
 
-# resumen_atributos <- resumen_atributos[order(-resumen_atributos$Porcentaje), ]
 resumen_atributos[order(-resumen_atributos$Frecuencia),]
 
 ```
@@ -353,17 +340,16 @@ En este último bloque damos el salto definitivo de los datos crudos a la interp
 Una vez aislados y ordenados los 20 perfiles más dominantes de la red, los empaquetamos en un formato de texto estructurado y realizamos una petición a la API de Groq. Utilizando técnicas de Prompt Engineering, configuramos un modelo de Inteligencia Artificial (Llama 3) para que actúe como un sociólogo computacional. El resultado final es una tabla Markdown lista para leer, donde la IA cruza nuestras métricas de red, temas y sentimientos para explicarnos el papel exacto que juega cada perfil de usuario dentro de la comunidad.
 
 ```{r}
-# 1. Obtenemos la matriz de intensiones
+# Obtenemos la matriz de intensiones
 matriz_int_normal <- as.matrix(fc$concepts$intents())
 
-# 2. Cogemos los nombres de los atributos directamente de tu matriz original
 nombres_atributos <- colnames(matriz_fca_final)
 
-# 3. Calculamos los soportes reales
+# Calculamos los soportes reales
 n_comentarios <- nrow(matriz_fca_final)
 soportes_reales <- as.numeric(fc$concepts$support() * n_comentarios)
 
-# 4. Encontrar los índices (Usamos > 0 para que pille TRUE o 1 sin fallar)
+# Encontrar los índices
 indices_interesantes <- which(colSums(matriz_int_normal > 0) >= 3 & soportes_reales >= 5)
 
 if(length(indices_interesantes) > 0) {
@@ -372,7 +358,6 @@ if(length(indices_interesantes) > 0) {
   indices_interesantes <- indices_interesantes[order(soportes_reales[indices_interesantes], decreasing = TRUE)]
   if(length(indices_interesantes) > 20) indices_interesantes <- indices_interesantes[1:20]
   
-  # Construir las líneas de texto
   lineas_ia <- sapply(indices_interesantes, function(i) {
     atributos_activos <- nombres_atributos[matriz_int_normal[, i] > 0]
     
@@ -393,10 +378,9 @@ if(length(indices_interesantes) > 0) {
   cat("La red sigue sin solaparse. Prueba a bajar los requisitos (ej. colSums >= 2 o soportes >= 3)\n")
 }
 
-# 1. Definimos el prompt definitivo
 prompt_ia_conceptos <- paste(
   "Actúa como un sociólogo computacional experto en análisis de discurso en Reddit.",
-  "Contexto: He analizado una comunidad de criptomonedas/finanzas usando FCA.",
+  # "Contexto: He analizado una comunidad de criptomonedas/finanzas usando FCA.",
   "Objetivo: Interpretar 'Conceptos Formales' (clústeres lógicos de atributos).",
   "Instrucciones:",
   "1. Identifica el perfil del usuario (¿Es un líder de opinión, un 'troll', un usuario escéptico?).",
@@ -407,20 +391,18 @@ prompt_ia_conceptos <- paste(
   texto_final_ia
 )
 
-# 2. Llamada a la API LOCAL de Ollama (Usando Qwen)
 respuesta_fca_conc <- request("http://localhost:11434/api/chat") |>
   req_body_json(list(
-    model = "qwen2.5", # Nombre exacto del modelo local
+    model = "qwen2.5",
     messages = list(list(role = "user", content = prompt_ia_conceptos)),
-    stream = FALSE, # Recibir respuesta completa de una vez
+    stream = FALSE, 
     options = list(
       temperature = 0.4 # Temperatura baja para que sea analítico y no invente
     )
   )) |>
-  req_timeout(300) |> # Damos margen de 5 minutos al procesamiento local
+  req_timeout(300) |> 
   req_perform()
 
-# 3. Extraemos y mostramos la respuesta en la consola
 interpretacion_fca_conc <- resp_body_json(respuesta_fca_conc)$message$content
 
 cat("\n### Conclusiones Sociológicas Inferidas (vía Qwen Local)\n\n")

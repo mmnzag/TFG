@@ -14,20 +14,17 @@
 
 # Configuración y carga de datos
 
+En este caso, se ha seleccionado un dataset público del repositorio de Kaggle. Se ha seleccionado una muestra de 50000 filas para el caso de uso.
 ```{r}
 library(tidyverse)
-library(tidytext) # La joya de la corona para NLP moderno
-library(tm)       # Solo lo mantenemos para la conversión final de la matriz
+library(tidytext)
+library(tm)       
 library(textstem)
 
-# Asegurar que el directorio de salida existe
 dir.create("data/kaggle", recursive = TRUE, showWarnings = FALSE)
 
-# (En la memoria explicamos que esta es la Fase 2: Ingesta Masiva)
-# Carga de la muestra de estrés de Kaggle (50.000 filas)
 dataset_bruto <- read.csv("data/reddit_opinion_ru_ua.csv")
 
-# Añadimos un ID único a cada comentario, vital para el topic modeling
 dataset_bruto <- dataset_bruto |> 
   mutate(doc_id = row_number())
 
@@ -35,20 +32,16 @@ cat("Hilos encontrados para el nuevo debate:", nrow(dataset_bruto))
 head(dataset_bruto)
 
 
-# Extraer una muestra aleatoria de 50.000 filas nada más cargar
-set.seed(123) # Garantiza que siempre extraigas los mismos 50.000 comentarios
+set.seed(123) 
 datos <- dataset_bruto |> 
   slice_sample(n = 50000) |>
   mutate(date=created_time,
-         url = post_title,       # Usamos el título del post para agrupar (como hablamos antes)
+         url = post_title,       # Usamos el título del post para agrupar 
          author = author_name,
          timestamp = created_time,
          upvotes = ups,
          downvotes = downs,
          comment = self_text,
-        
-         # 2. Fabricamos las columnas que faltan en el nuevo dataset
-         # Rellenamos con NA (texto) o 0 (números) para que el código posterior no falle
          golds = 0,
          parent_id = NA_character_)
 
@@ -67,14 +60,10 @@ participaciones <- datos |>
   filter(!is.na(author_name) & author_name != "" & author_name != "[deleted]") |>
   distinct()
 
-# 2. Magia Relacional: Cruzamos la tabla consigo misma por el 'post_id'
-# Esto conecta a todos los usuarios que han comentado en el mismo post
+# Concectamos a todos los usuarios que han comentado en el mismo post
 edges_co_participacion <- participaciones |>
   inner_join(participaciones, by = "post_id", relationship = "many-to-many") |>
-  # Usamos '<' en lugar de '!=' para evitar aristas duplicadas (A->B y B->A) 
-  # y para eliminar conexiones de un usuario consigo mismo
   filter(author_name.x < author_name.y) |>
-  # Renombramos para que tidygraph y tu script de redes lo entiendan
   select(from = author_name.x, to = author_name.y)
 
 data_sna <- edges_co_participacion
@@ -84,7 +73,9 @@ saveRDS(data_sna, "data/kaggle/data_sna.rds")
 
 
 # Preprocesamiento de texto y lematización
+Se realiza el mismo procedimiento que en el procesado de los datos obtenidos de la API de reddit: el doble flujo de limpieza:
 
+- **Optimizado:** Eliminación de URLs y caracteres no alfanuméricos seguido de una lematización para agrupar términos por su raíz semántica.
 ```{r}
 data_texto <- datos |>
   mutate(
@@ -110,27 +101,25 @@ saveRDS(textos_sentimiento, "data/kaggle/textos_sentimiento.rds")
 
 
 
-
+- **Normalizado:** Matriz Documento-Término (DTM) mediante la tokenización, lematización y filtrado por dispersión del corpus.
 ```{r}
-# Descargamos las stop words en inglés
 stop_words_en <- get_stopwords(language = "en")
 
-# 1. Tokenizamos y limpiamos a nivel de palabra
+#Tokenizamos y limpiamos a nivel de palabra
 tokens_limpios <- data_texto |>
   unnest_tokens(word, texto_limpio) |>
   anti_join(stop_words_en, by = "word") |>
-  filter(!str_detect(word, "^[0-9]+$")) |> # Eliminamos números sueltos
-  mutate(word = lemmatize_words(word))     # Lematizamos (ej. running -> run)
+  filter(!str_detect(word, "^[0-9]+$")) |> 
+  mutate(word = lemmatize_words(word))     
 
-# 2. Contamos frecuencias
+# Contamos frecuencias
 word_counts <- tokens_limpios |>
   count(doc_id, word, sort = TRUE)
 
-# 3. Casteamos a Matriz Documento-Término (DTM) compatible con topicmodels
+# Casteamos a Matriz Documento-Término (DTM) 
 dtm_bruta <- word_counts |>
   cast_dtm(document = doc_id, term = word, value = n)
 
-# 4. Reducimos la dispersidad (como hacías tú, es fundamental)
 # Nos quedamos con palabras que aparezcan en al menos el 1% de los documentos
 dtm_lda <- removeSparseTerms(dtm_bruta, 0.99)
 

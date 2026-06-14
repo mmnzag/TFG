@@ -1323,10 +1323,10 @@ server <- function(input, output, session) {
     
     df <- df |>
       dplyr::mutate(
-        # 1. Forzamos a que sea texto para evitar errores de stringr
+        # Forzamos a que sea texto para evitar errores de stringr
         !!rlang::sym(columna_texto) := as.character(.data[[columna_texto]]),
         
-        # 2. Aplicamos limpieza usando .data en lugar de .
+        # Aplicamos limpieza usando .data en lugar de .
         !!rlang::sym(columna_texto) := stringr::str_to_lower(.data[[columna_texto]]),
         !!rlang::sym(columna_texto) := stringr::str_remove_all(.data[[columna_texto]], "http[s]?://\\S+"),
         !!rlang::sym(columna_texto) := stringr::str_remove_all(.data[[columna_texto]], "[^a-záéíóúñ\\s]"),
@@ -1379,7 +1379,7 @@ server <- function(input, output, session) {
     
     dfm_obj <- quanteda::dfm(toks)
     
-    # Aplicar dfm_trim de forma segura para evitar vaciar la matriz DFM (especialmente en archivos de prueba pequeños)
+    # Aplicar dfm_trim de forma segura para evitar vaciar la matriz DFM 
     if (quanteda::ndoc(dfm_obj) > 0 && quanteda::nfeat(dfm_obj) > 0) {
       dfm_trimmed <- tryCatch({
         quanteda::dfm_trim(dfm_obj, min_termfreq = 2, termfreq_type = "count", min_docfreq = 0.01, max_docfreq = 0.9, docfreq_type = "prop")
@@ -1460,13 +1460,13 @@ server <- function(input, output, session) {
     
     withProgress(message = "Procesando dataset...", value = 0, {
       tryCatch({
-        # Paso 1: Carga del dataset
+        # Carga del dataset
         incProgress(0.1, detail = "Cargando archivo...")
         ext <- tools::file_ext(input$file_upload$name)
         if (ext == "rds") {
           df <- readRDS(input$file_upload$datapath)
         } else if (ext == "csv") {
-          # Detectar el delimitador (coma o punto y coma) leyendo la primera línea para evitar lecturas de una sola columna
+          # Detectar el delimitador leyendo la primera línea para evitar lecturas de una sola columna
           primera_linea <- readLines(input$file_upload$datapath, n = 1)
           num_comas <- stringr::str_count(primera_linea, ",")
           num_puntoycomas <- stringr::str_count(primera_linea, ";")
@@ -1500,7 +1500,7 @@ server <- function(input, output, session) {
         
         rv$dataset_original <- df
         
-        # Paso 2: Limpieza del texto
+        # Limpieza del texto
         incProgress(0.2, detail = "Limpiando el texto...")
         col_texto <- intersect(names(df), c("comment", "comment_id", "body", "text", "comentario", "contenido"))
         col_texto <- intersect(col_texto, c("comment", "text", "comentario", "body"))[1]
@@ -1519,7 +1519,7 @@ server <- function(input, output, session) {
         
         rv$dataset_procesado <- df_limpio
         
-        # Paso 3: Cálculo de métricas de red (SNA)
+        # Cálculo de métricas de red (SNA)
         incProgress(0.4, detail = "Calculando métricas de red...")
         col_from <- intersect(names(df_limpio), c("from", "autor", "author", "user"))[1]
         col_to <- intersect(names(df_limpio), c("to", "destinatario", "menciona", "reply_to"))[1]
@@ -1544,7 +1544,7 @@ server <- function(input, output, session) {
         
         df_edges <- data.frame(from = character(0), to = character(0), stringsAsFactors = FALSE)
         
-        # 1. Intentar red conversacional directa (reply)
+        # Intentar red conversacional directa (reply)
         if (!is.na(col_from) && !is.na(col_to)) {
           df_edges_direct <- df_limpio |>
             dplyr::select(all_of(c(col_from, col_to))) |>
@@ -1555,7 +1555,7 @@ server <- function(input, output, session) {
           }
         }
         
-        # 2. Si la red directa está vacía, intentar construir red de co-participación por post/hilo
+        # Si la red directa está vacía, intentar construir red de co-participación por post/hilo
         if (nrow(df_edges) == 0 && !is.na(col_from)) {
           col_post <- intersect(names(df_limpio), c("post_id", "url", "hilo_id", "thread_id"))[1]
           if (!is.na(col_post)) {
@@ -1625,12 +1625,12 @@ server <- function(input, output, session) {
           )
         }
         
-        # Paso 4: Análisis de sentimiento (NRC)
+        # Análisis de sentimiento (NRC)
         incProgress(0.6, detail = "Analizando sentimientos con NRC...")
         sentimientos <- analizar_sentimientos_nrc(df_limpio, columna_texto = col_texto)
         rv$matriz_sentimientos <- sentimientos
         
-        # Paso 5: Generación de tópicos dinámicos (LDA)
+        # Generación de tópicos dinámicos (LDA)
         incProgress(0.8, detail = "Entrenando modelo de tópicos...")
         num_topics <- max(3, min(10, ceiling(nrow(df_limpio) / 100)))
         lda_results <- entrenar_modelo_lda(df_limpio, columna_texto = col_texto, num_topics = num_topics)
@@ -1918,7 +1918,7 @@ server <- function(input, output, session) {
     tags$p(tags$strong(metodo), style = "color: #555; margin-bottom: 12px;")
   })
   
-  # --- Renderizado dinámico o estático (Fallback) de gráficos ---
+  # Renderizado dinámico o estático (Fallback) de gráficos
   output$sent_plot_ui <- renderUI({
     if (!is.null(input$file_upload) && !rv$archivo_cargado) {
       return(esperando_resultados_ui("Esperando a procesar el dataset cargado..."))
@@ -1937,7 +1937,7 @@ server <- function(input, output, session) {
       
       # Generar el gráfico dinámico seleccionado
       if (input$sent_grafico %in% c("sa_plot_relacion_sentimiento_popularidad.png", "sa_plot_relacion_sentimiento_popularidad_ia.png")) {
-        # 1. Sentimiento vs popularidad
+        # Sentimiento vs popularidad
         ggplot(df_sent, aes(x = valencia, y = score)) +
           scale_y_log10(labels = scales::comma) +
           geom_jitter(alpha = 0.3, color = (if(is_light) "navy" else "#60a5fa"), width = 0.2) +
@@ -1950,7 +1950,7 @@ server <- function(input, output, session) {
           ) +
           obtener_tema_plot(is_light)
       } else if (input$sent_grafico %in% c("sa_plot_evo_temp.png", "sa_grafico_temporal_ia.png")) {
-        # 2. Evolución temporal con media móvil
+        # Evolución temporal con media móvil
         df_temp <- df_sent |>
           dplyr::mutate(fecha = as.Date(date)) |>
           dplyr::group_by(fecha) |>
@@ -1976,7 +1976,7 @@ server <- function(input, output, session) {
           ) +
           obtener_tema_plot(is_light)
       } else if (input$sent_grafico %in% c("sa_plot_micro_contextos.png", "sa_plot_micro_contextos_ia.png")) {
-        # 3. Micro-contextos por hilo
+        # Micro-contextos por hilo
         top_urls <- df_sent |>
           dplyr::count(url, sort = TRUE) |>
           dplyr::slice_head(n = 12) |>
@@ -1996,7 +1996,7 @@ server <- function(input, output, session) {
           obtener_tema_plot(is_light) +
           theme(legend.position = "none", strip.text = element_text(size = 7, color = (if(is_light) "#0f172a" else "#cbd5e1")))
       } else if (input$sent_grafico %in% c("sa_plot_camara_eco.png", "sa_plot_camara_eco_ia.png")) {
-        # 4. Cámaras de eco por comunidad
+        # Cámaras de eco por comunidad
         roles_df <- if (!is.null(rv$tabla_roles)) rv$tabla_roles else tabla_roles
         data_echo <- roles_df |>
           dplyr::inner_join(df_sent, by = c("name" = "author")) |>
@@ -2151,7 +2151,7 @@ server <- function(input, output, session) {
     data_sna <- readRDS(paste0("data/", fuente_activa, "/data_sna.rds"))
     data_sna <- dplyr::count(data_sna, from, to, name = "weight")
     
-    # 1. Creamos el grafo y calculamos las métricas
+    #  Creamos el grafo y calculamos las métricas
     g <- tidygraph::as_tbl_graph(data_sna, directed = TRUE) |>
       tidygraph::activate("nodes") |>
       dplyr::mutate(
@@ -2162,7 +2162,7 @@ server <- function(input, output, session) {
         eigenvector = tidygraph::centrality_eigen()
       )
     
-    # 2. Le pegamos los roles de tu archivo tabla_roles.rds
+    #  Le pegamos los roles de tu archivo tabla_roles.rds
     if (file.exists(ruta_tabla_roles)) {
       g <- g |>
         tidygraph::activate("nodes") |>
@@ -2355,13 +2355,13 @@ server <- function(input, output, session) {
         )
       
       v_net <- visNetwork(nodes, edges, height = "650px") |>
-        # 1. SOLUCIÓN AL "BAILE": Forzamos la semilla para que los nodos siempre salgan en el mismo sitio
+        # Forzamos la semilla para que los nodos siempre salgan en el mismo sitio
         visIgraphLayout(layout = "layout_with_fr", randomSeed = input$sna_seed) |> 
         visNodes(shadow = list(enabled = TRUE, size = 20), scaling = list(min = 30, max = 80)) |>
         visEdges(arrows = "to", smooth = FALSE, color = list(highlight = "#FF7034")) |>
         visOptions(highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE), nodesIdSelection = list(enabled = TRUE, useLabels = TRUE)) |>
         visInteraction(navigationButtons = TRUE, zoomView = TRUE, dragNodes = TRUE) |>
-        # 2. SOLUCIÓN A LA IA: htmlwidgets::JS() obliga al navegador a reconocer el evento del clic
+        # SOLUCIÓN A LA IA: htmlwidgets::JS() obliga al navegador a reconocer el evento del clic
         visEvents(selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('sna_node', event.nodes[0], {priority:'event'}); } }"))
 
       # Leyenda interna deshabilitada para usar una versión HTML limpia, alineada y responsive
@@ -2382,7 +2382,7 @@ server <- function(input, output, session) {
       
       # Generar el gráfico seleccionado
       if (input$sna_grafico == "sna_grafo_limpio.png") {
-        # 1. Red de interacciones
+        # Red de interacciones
         g1 <- generate_subgraph_advanced(
           umbral_nodos = input$sna_umbral_nodos,
           umbral_aristas = input$sna_umbral_aristas,
@@ -2391,7 +2391,7 @@ server <- function(input, output, session) {
         plot_graph(seed = input$sna_seed, grafo = g1)
         
       } else if (input$sna_grafico == "sna_distribucion_grado.png") {
-        # 2. Distribución de grado
+        # Distribución de grado
         df_grados <- g0 |>
           tidygraph::activate("nodes") |>
           dplyr::as_tibble() |>
@@ -2414,7 +2414,7 @@ server <- function(input, output, session) {
           obtener_tema_plot(is_light)
           
       } else if (input$sna_grafico == "sna_distribucion_metrica.png") {
-        # 3. Distribución de métricas
+        # Distribución de métricas
         df_metrics_long <- g0 |>
           tidygraph::activate("nodes") |>
           dplyr::as_tibble() |>
@@ -2430,7 +2430,7 @@ server <- function(input, output, session) {
           obtener_tema_plot(is_light)
                
       } else if (input$sna_grafico == "sna_louvain.png") {
-        # 4. Comunidades (Louvain)
+        # Comunidades (Louvain)
         g_undir <- g0 |>
           tidygraph::morph(tidygraph::to_undirected) |>
           dplyr::mutate(com_louvain = tidygraph::group_louvain(resolution = 2)) |>
@@ -2441,7 +2441,7 @@ server <- function(input, output, session) {
         plot_comunidades(graph = g_undir, comunidad_col = "community_louvain", titulo = "Comunidades (Louvain)", light = is_light)
         
       } else if (input$sna_grafico == "sna_walktrap.png") {
-        # 5. Comunidades (Walktrap)
+        # Comunidades (Walktrap)
         g_walk <- g0 |>
           tidygraph::activate("nodes") |>
           dplyr::mutate(com_walktrap = tidygraph::group_walktrap()) |>
@@ -2450,7 +2450,7 @@ server <- function(input, output, session) {
         plot_comunidades(graph = g_walk, comunidad_col = "community_walktrap", titulo = "Comunidades (Walktrap)", light = is_light)
         
       } else if (input$sna_grafico == "sna_mapa_roles.png") {
-        # 6. Mapa de roles
+        # Mapa de roles
         roles_df <- rv$tabla_roles
         validate(need(!is.null(roles_df), "No se han detectado roles para este dataset."))
         
@@ -2462,7 +2462,7 @@ server <- function(input, output, session) {
           obtener_tema_plot(is_light)
                 
       } else if (input$sna_grafico == "sna_ego_red.png") {
-        # 7. Red egocéntrica
+        # Red egocéntrica
         roles_df <- rv$tabla_roles
         validate(need(!is.null(roles_df), "No se han detectado roles para este dataset."))
         
@@ -2509,7 +2509,7 @@ server <- function(input, output, session) {
   })
   
   # Panel inteligente con detalles del nodo y explicación IA
-  # 1. Al hacer clic en un nodo: Solo guardamos sus datos y limpiamos la IA anterior
+  # Al hacer clic en un nodo: Solo guardamos sus datos y limpiamos la IA anterior
   observeEvent(input$sna_node, {
     req(input$sna_node)
     g0 <- obtener_grafo_activo()
@@ -2526,7 +2526,7 @@ server <- function(input, output, session) {
     selected_sna_node_explanation(NULL) # Reseteamos la explicación para que salga el botón
   }, ignoreNULL = TRUE)
   
-  # 2. Renderizado de la tarjeta: Muestra las métricas y el botón (o la respuesta si ya la hay)
+  # Renderizado de la tarjeta: Muestra las métricas y el botón (o la respuesta si ya la hay)
   output$sna_node_details <- renderUI({
     node <- selected_sna_node()
     explanation <- selected_sna_node_explanation()
@@ -2566,7 +2566,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # 3. Al hacer clic en "Generar report IA": Disparamos a Ollama con un prompt estricto
+  # Al hacer clic en "Generar report IA": Disparamos a Ollama con un prompt estricto
   observeEvent(input$sna_generate_ia_report, {
     node_data <- selected_sna_node()
     req(node_data)
@@ -2593,7 +2593,7 @@ server <- function(input, output, session) {
   fca_net_positions <- reactiveVal(NULL)
   
   build_matriz_fca <- function() {
-    # 1. Cargar los datos y preparar cruces
+    # Cargar los datos y preparar cruces
     if (rv$archivo_cargado) {
       validate(
         need(!is.null(rv$modelo_lda), "No se ha entrenado el modelo LDA para este dataset."),
@@ -2647,7 +2647,7 @@ server <- function(input, output, session) {
         dplyr::slice_head(n = 500)
     }
     
-    # 2. Detección automática de temas y comunidades
+    # Detección automática de temas y comunidades
     nombres_temas_automaticos <- setdiff(names(df_temas), "comment_id")
     nombres_temas_limpios <- gsub("\\s+", "_", nombres_temas_automaticos)
     
@@ -2661,7 +2661,7 @@ server <- function(input, output, session) {
     q1_engagement <- stats::quantile(df_integrado$score, 0.25, na.rm = TRUE)
     q3_engagement <- stats::quantile(df_integrado$score, 0.75, na.rm = TRUE)
     
-    # 3. Creación DINÁMICA de columnas (Comunidades y Temas)
+    # Creación DINÁMICA de columnas (Comunidades y Temas)
     mutaciones_comunidades <- purrr::map_dfc(comunidades_list, ~{
       col_name <- paste0("Autor_Comunidad_", .x)
       tibble::tibble(!!col_name := ifelse(df_integrado$comunidad == .x, 1, 0))
@@ -2685,7 +2685,7 @@ server <- function(input, output, session) {
     sorpresa_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Surprise") else (df_integrado$surprise > 0)
     asco_act <- if (use_ia_data) (!is.na(df_integrado$emocion_ia) & df_integrado$emocion_ia == "Disgust") else (df_integrado$disgust > 0)
     
-    # 4. Construcción del Dataframe combinando base + bloques dinámicos
+    # Construcción del Dataframe combinando base + bloques dinámicos
     df_fca <- df_integrado |>
       mutate(
         Autor_Alta_Influencia  = ifelse(pagerank >= q3_influencia, 1, 0),
@@ -2723,7 +2723,7 @@ server <- function(input, output, session) {
       bind_cols(mutaciones_comunidades) |>
       bind_cols(mutaciones_temas)
     
-    # 5. Selección final dinámica de columnas
+    # Selección final dinámica de columnas
     nombres_comunidades <- paste0("Autor_Comunidad_", comunidades_list)
     nombres_temas_atributos <- paste0("Tema_", nombres_temas_limpios)
     
@@ -2742,7 +2742,7 @@ server <- function(input, output, session) {
     matriz_fca_limpia <- df_fca |>
       select(all_of(cols_a_seleccionar))
     
-    # 6. Procesamiento FCA
+    # Procesamiento FCA
     matriz_fca_final <- as.matrix(matriz_fca_limpia)
     
     resumen_atributos <- data.frame(
@@ -2835,7 +2835,7 @@ server <- function(input, output, session) {
         ),
         br(),
         uiOutput("fca_attr_details"),
-        DT::dataTableOutput("fca_attr_concepts_dt") # <-- ¡LO SACAMOS FUERA AQUÍ!
+        DT::dataTableOutput("fca_attr_concepts_dt") 
       ),
       tabPanel(
         title = "Conceptos",
@@ -3191,239 +3191,174 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
   
   output$fca_concepts_net <- renderVisNetwork({
+    input$fca_run
+    input$fca_tabs
+    res <- fca_resultados()
+    validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
 
-input$fca_run
+    intents <- as.matrix(res$concepts_intents)
+    nombres_atributos <- colnames(res$matriz)
+    n_comentarios <- nrow(res$matriz)
+    soportes_reales <- round(res$soportes * n_comentarios)
 
-input$fca_tabs
-
-res <- fca_resultados()
-
-validate(need(!is.null(res), "Pulsa 'Calcular FCA' para generar los resultados."))
-
-
-intents <- as.matrix(res$concepts_intents)
-
-nombres_atributos <- colnames(res$matriz)
-
-n_comentarios <- nrow(res$matriz)
-
-soportes_reales <- round(res$soportes * n_comentarios)
-
-
-min_attr <- as.integer(input$fca_min_attributes)
-
-min_comments <- as.integer(input$fca_min_comments)
-
-ids <- which(colSums(intents > 0) >= min_attr & soportes_reales >= min_comments)
-
-sel_attrs <- input$fca_atributos
-
-if (!is.null(sel_attrs) && length(sel_attrs) > 0) {
-
-ids <- ids[sapply(ids, function(i) all(sel_attrs %in% nombres_atributos[intents[, i] > 0]))]
-
-}
-
-if (length(ids) == 0) {
-
-fca_displayed_ord(NULL)
-
-fca_displayed_edges(NULL)
-
-return(NULL)
-
-}
-
-ord <- ids[order(-soportes_reales[ids])]
-
-topn <- as.integer(input$fca_top_n)
-
-if (length(ord) > topn) {
-  bottom_id <- which.max(colSums(intents > 0))
-  if (bottom_id %in% ids) {
-    ord <- c(setdiff(ord, bottom_id)[1:(topn - 1)], bottom_id)
-  } else {
-    ord <- ord[1:topn]
-  }
-}
+    min_attr <- as.integer(input$fca_min_attributes)
+    min_comments <- as.integer(input$fca_min_comments)
+    ids <- which(colSums(intents > 0) >= min_attr & soportes_reales >= min_comments)
+    sel_attrs <- input$fca_atributos
+    
+    if (!is.null(sel_attrs) && length(sel_attrs) > 0) {
+      ids <- ids[sapply(ids, function(i) all(sel_attrs %in% nombres_atributos[intents[, i] > 0]))]
+    }
+    
+    if (length(ids) == 0) {
+      fca_displayed_ord(NULL)
+      fca_displayed_edges(NULL)
+      return(NULL)
+    }
+    
+    ord <- ids[order(-soportes_reales[ids])]
+    topn <- as.integer(input$fca_top_n)
+    
+    if (length(ord) > topn) {
+      bottom_id <- which.max(colSums(intents > 0))
+      if (bottom_id %in% ids) {
+        ord <- c(setdiff(ord, bottom_id)[1:(topn - 1)], bottom_id)
+      } else {
+        ord <- ord[1:topn]
+      }
+    }
 
 
 # Nodos con estilo limpio
 
-nodes <- data.frame(
-
-id = seq_along(ord),
-
-title = paste0("Concepto ", ord),
-
-label = paste0("C", ord, " (", soportes_reales[ord], ")"),
-
-value = pmax(1, soportes_reales[ord]),
-
-stringsAsFactors = FALSE
-
-)
+    nodes <- data.frame(
+      id = seq_along(ord),
+      title = paste0("Concepto ", ord),
+      label = paste0("C", ord, " (", soportes_reales[ord], ")"),
+      value = pmax(1, soportes_reales[ord]),
+      stringsAsFactors = FALSE
+    )
 
 
-# Aristas
+    # Aristas
+    sub_intents <- intents[, ord, drop = FALSE]
+    k <- ncol(sub_intents)
+    
+    # Calcular el número de atributos (especificidad) para cada concepto
+    num_atributos <- sapply(seq_along(ord), function(idx) sum(sub_intents[, idx] > 0))
+    max_attr <- max(num_atributos, 1)
+    
+    # Generar paleta de colores funcionales (cálido a frío: rojo -> naranja -> verde -> azul)
+    # A menor número de atributos (más general/alto), más cálido (rojo/naranja)
+    # A mayor número de atributos (más específico/bajo), más frío (verde/azul)
+    paleta_bg <- colorRampPalette(c("#ff6b6b", "#feca57", "#1dd1a1", "#54a0ff"))(max_attr + 1)
+    paleta_border <- colorRampPalette(c("#ee5253", "#ff9f43", "#10ac84", "#2e86de"))(max_attr + 1)
+    
+    nodes$color.background <- paleta_bg[num_atributos + 1]
+    nodes$color.border <- paleta_border[num_atributos + 1]
+    nodes$title <- paste0(
+      "<div style='background:var(--bg-card);color:var(--text-primary);padding:10px 14px;margin:-15px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;line-height:1.5;'>",
+      "Concepto ", ord, " (", num_atributos, " atributos, ", soportes_reales[ord], " objetos)",
+      "</div>"
+    )
+    
+    edges_list <- list()
 
-sub_intents <- intents[, ord, drop = FALSE]
+    if (k > 1) {
+      for (i in 1:(k - 1)) {
+        for (j in (i + 1):k) {
+          a <- sub_intents[, i] > 0
+          b <- sub_intents[, j] > 0
+          
+          inter <- sum(a & b)
+          union <- sum(a | b)
+          sim <- ifelse(union == 0, 0, inter / union)
+          
+          if (sim > 0.20) {
+          # Direccionamos la arista del concepto más general al más específico
+          
+            if (sum(a) < sum(b)) {
+              edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2))
+            } else if (sum(a) > sum(b)) {
+              edges_list[[length(edges_list) + 1]] <- data.frame(from = j, to = i, width = round(sim * 10, 2))
+            }
+          }
+        }
+      }
+    }
+    
+    # Conectar nodos hojas al concepto vacío (bottom_id) si este está presente para evitar que quede aislado
+    bottom_id <- which.max(colSums(intents > 0))
+    bottom_idx <- which(ord == bottom_id)
+    if (length(bottom_idx) > 0 && k > 1) {
+      from_nodes <- if (length(edges_list) > 0) sapply(edges_list, function(e) e$from) else integer(0)
+      leaf_nodes <- setdiff(seq_len(k), c(from_nodes, bottom_idx))
+      for (leaf in leaf_nodes) {
+        a <- sub_intents[, leaf] > 0
+        b <- sub_intents[, bottom_idx] > 0
+        sim <- sum(a & b) / sum(a | b)
+        width_val <- if (sim > 0) round(sim * 10, 2) else 1.0
+        edges_list[[length(edges_list) + 1]] <- data.frame(from = leaf, to = bottom_idx, width = width_val)
+      }
+    }
 
-k <- ncol(sub_intents)
-
-# Calcular el número de atributos (especificidad) para cada concepto
-num_atributos <- sapply(seq_along(ord), function(idx) sum(sub_intents[, idx] > 0))
-max_attr <- max(num_atributos, 1)
-
-# Generar paleta de colores funcionales (cálido a frío: rojo -> naranja -> verde -> azul)
-# A menor número de atributos (más general/alto), más cálido (rojo/naranja)
-# A mayor número de atributos (más específico/bajo), más frío (verde/azul)
-paleta_bg <- colorRampPalette(c("#ff6b6b", "#feca57", "#1dd1a1", "#54a0ff"))(max_attr + 1)
-paleta_border <- colorRampPalette(c("#ee5253", "#ff9f43", "#10ac84", "#2e86de"))(max_attr + 1)
-
-nodes$color.background <- paleta_bg[num_atributos + 1]
-nodes$color.border <- paleta_border[num_atributos + 1]
-nodes$title <- paste0(
-  "<div style='background:var(--bg-card);color:var(--text-primary);padding:10px 14px;margin:-15px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;line-height:1.5;'>",
-  "Concepto ", ord, " (", num_atributos, " atributos, ", soportes_reales[ord], " objetos)",
-  "</div>"
-)
-
-edges_list <- list()
-
-if (k > 1) {
-
-for (i in 1:(k - 1)) {
-
-for (j in (i + 1):k) {
-
-a <- sub_intents[, i] > 0
-
-b <- sub_intents[, j] > 0
-
-inter <- sum(a & b)
-
-union <- sum(a | b)
-
-sim <- ifelse(union == 0, 0, inter / union)
-
-if (sim > 0.20) {
-
-# Direccionamos la arista del concepto más general al más específico
-
-if (sum(a) < sum(b)) {
-
-edges_list[[length(edges_list) + 1]] <- data.frame(from = i, to = j, width = round(sim * 10, 2))
-
-} else if (sum(a) > sum(b)) {
-
-edges_list[[length(edges_list) + 1]] <- data.frame(from = j, to = i, width = round(sim * 10, 2))
-
-}
-
-}
-
-}
-
-}
-
-}
-
-# Conectar nodos hojas al concepto vacío (bottom_id) si este está presente para evitar que quede aislado
-bottom_id <- which.max(colSums(intents > 0))
-bottom_idx <- which(ord == bottom_id)
-if (length(bottom_idx) > 0 && k > 1) {
-  from_nodes <- if (length(edges_list) > 0) sapply(edges_list, function(e) e$from) else integer(0)
-  leaf_nodes <- setdiff(seq_len(k), c(from_nodes, bottom_idx))
-  for (leaf in leaf_nodes) {
-    a <- sub_intents[, leaf] > 0
-    b <- sub_intents[, bottom_idx] > 0
-    sim <- sum(a & b) / sum(a | b)
-    width_val <- if (sim > 0) round(sim * 10, 2) else 1.0
-    edges_list[[length(edges_list) + 1]] <- data.frame(from = leaf, to = bottom_idx, width = width_val)
-  }
-}
-
-edges <- if (length(edges_list) > 0) do.call(rbind, edges_list) else data.frame(from = integer(0), to = integer(0), width = numeric(0))
+    edges <- if (length(edges_list) > 0) do.call(rbind, edges_list) else data.frame(from = integer(0), to = integer(0), width = numeric(0))
 
 
-# Reducción transitiva para limpiar aristas redundantes y mantener el esqueleto jerárquico limpio
-
-if (nrow(edges) > 0 && k > 1) {
-
-temp_vertices <- data.frame(name = as.character(seq_len(k)))
-
-ig_temp <- igraph::graph_from_data_frame(d = edges, vertices = temp_vertices, directed = TRUE)
-
-ig_reduced <- transitive_reduction(ig_temp)
-
-edges <- igraph::as_data_frame(ig_reduced, what = "edges")
-
-if (nrow(edges) > 0) {
-
-edges$from <- as.integer(edges$from)
-
-edges$to <- as.integer(edges$to)
-
-} else {
-
-edges <- data.frame(from = integer(0), to = integer(0), width = numeric(0), stringsAsFactors = FALSE)
-
-}
-
-
-# Calcular el layout de Sugiyama para posicionamiento inicial jerárquico y libre movimiento posterior
-
-lay <- igraph::layout_with_sugiyama(ig_reduced)
-
-nodes$x <- lay$layout[, 1] * 450 # Espaciar horizontalmente a lo ancho
-
-nodes$y <- -lay$layout[, 2] * 260 # Ir de arriba a abajo e invertir
-
-} else {
-
-# Posicionamiento fallback si no hay aristas
-
-if (k > 0) {
-
-nodes$x <- cos(seq_len(k) * 2 * pi / k) * 200
-
-nodes$y <- sin(seq_len(k) * 2 * pi / k) * 200
-
-}
-
-}
-
+    # Reducción transitiva para limpiar aristas redundantes y mantener el esqueleto jerárquico limpio
+    
+    if (nrow(edges) > 0 && k > 1) {
+      temp_vertices <- data.frame(name = as.character(seq_len(k)))
+      ig_temp <- igraph::graph_from_data_frame(d = edges, vertices = temp_vertices, directed = TRUE)
+      ig_reduced <- transitive_reduction(ig_temp)
+      edges <- igraph::as_data_frame(ig_reduced, what = "edges")
+      
+      if (nrow(edges) > 0) {
+        edges$from <- as.integer(edges$from)
+        edges$to <- as.integer(edges$to)
+      } else {
+        edges <- data.frame(from = integer(0), to = integer(0), width = numeric(0), stringsAsFactors = FALSE)
+      }
+      # Calcular el layout de Sugiyama para posicionamiento inicial jerárquico y libre movimiento posterior
+    
+      lay <- igraph::layout_with_sugiyama(ig_reduced)
+      nodes$x <- lay$layout[, 1] * 450 # Espaciar horizontalmente a lo ancho
+      nodes$y <- -lay$layout[, 2] * 260 # Ir de arriba a abajo e invertir
+    
+    } else {
+    # Posicionamiento fallback si no hay aristas
+      if (k > 0) {
+      nodes$x <- cos(seq_len(k) * 2 * pi / k) * 200
+      nodes$y <- sin(seq_len(k) * 2 * pi / k) * 200
+      }
+    }
 
 # Actualizar variables reactivas
-
-fca_displayed_ord(ord)
-
-fca_displayed_edges(edges)
-
-
-# Renderizado final con diseño jerárquico nativo y libre arrastre de nodos
-
-visNetwork(nodes, edges) |>
-visNodes(
-shape = "dot",
-shadow = list(enabled = TRUE, size = 10),
-scaling = list(min = 25, max = 65),
-color = list(
-highlight = list(background = "#FFB703", border = "#F48C06") # Naranja al seleccionar
-)) |>
-visEdges(
-arrows = "to",
-smooth = list(type = "cubicBezier", forceDirection = "vertical"), # Curvas suaves hacia abajo
-color = list(color = "#C0C0C0", highlight = "#FF7034")
-) |>
-visInteraction(dragNodes = TRUE, zoomView = TRUE) |>
-visPhysics(enabled = FALSE) |>
-visOptions(highlightNearest = list(enabled = TRUE, degree = 1), nodesIdSelection = TRUE) |>
-visEvents(
-selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('fca_node_selected', event.nodes[0], {priority:'event'}); } }"),
-deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_selected', null); }")
-)
+    fca_displayed_ord(ord)
+    fca_displayed_edges(edges)
+    
+    # Renderizado final con diseño jerárquico nativo y libre arrastre de nodos
+    
+    visNetwork(nodes, edges) |>
+    visNodes(
+    shape = "dot",
+    shadow = list(enabled = TRUE, size = 10),
+    scaling = list(min = 25, max = 65),
+    color = list(
+    highlight = list(background = "#FFB703", border = "#F48C06") # Naranja al seleccionar
+    )) |>
+    visEdges(
+    arrows = "to",
+    smooth = list(type = "cubicBezier", forceDirection = "vertical"), # Curvas suaves hacia abajo
+    color = list(color = "#C0C0C0", highlight = "#FF7034")
+    ) |>
+    visInteraction(dragNodes = TRUE, zoomView = TRUE) |>
+    visPhysics(enabled = FALSE) |>
+    visOptions(highlightNearest = list(enabled = TRUE, degree = 1), nodesIdSelection = TRUE) |>
+    visEvents(
+    selectNode = htmlwidgets::JS("function(event) { if (event.nodes && event.nodes.length) { Shiny.setInputValue('fca_node_selected', event.nodes[0], {priority:'event'}); } }"),
+    deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_selected', null); }")
+    )
 }) 
 
 
@@ -3454,12 +3389,12 @@ deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_
     
     concept_id <- ord[idx]
     
-    # 1. Obtener atributos definidores (Intensión)
+    # Obtener atributos definidores (Intensión)
     intents <- as.matrix(res$concepts_intents)
     nombres_atributos <- colnames(res$matriz)
     atributos_activos <- nombres_atributos[intents[, concept_id] > 0]
     
-    # 2. Obtener objetos (comentarios en la Extensión)
+    # Obtener objetos (comentarios en la Extensión)
     n_comentarios <- nrow(res$matriz)
     soportes_reales <- round(res$soportes * n_comentarios)
     soporte_concepto <- soportes_reales[concept_id]
@@ -3496,7 +3431,7 @@ deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_
       helpText("No hay comentarios disponibles para este concepto.")
     }
     
-    # 3. Vecinos superiores (Padres en el retículo actual)
+    # Vecinos superiores (Padres en el retículo actual)
     upper_ids <- c()
     if (!is.null(edges) && nrow(edges) > 0) {
       upper_ids <- edges$from[edges$to == idx]
@@ -3517,7 +3452,7 @@ deselectNode = htmlwidgets::JS("function(event) { Shiny.setInputValue('fca_node_
       helpText("No tiene vecinos superiores en la red actual (es un concepto maximal/raíz).")
     }
     
-    # 4. Vecinos inferiores (Hijos en el retículo actual)
+    # Vecinos inferiores (Hijos en el retículo actual)
     lower_ids <- c()
     if (!is.null(edges) && nrow(edges) > 0) {
       lower_ids <- edges$to[edges$from == idx]

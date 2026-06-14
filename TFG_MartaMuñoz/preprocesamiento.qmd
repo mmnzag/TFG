@@ -18,8 +18,8 @@ Carga de librerías especializadas en minería de datos de Reddit (`RedditExtrac
 ```{r}
 library(RedditExtractoR)
 library(tidyverse) 
-library(tm) # text mining 
-library(textstem) # Para lematización
+library(tm) 
+library(textstem) 
 ```
 
 Se hace una búsqueda de hilos de hace menos de un mes sobre IA en el subreddit de tecnología.
@@ -37,8 +37,8 @@ if (file.exists(archivo_datos)) {
 } else {
   hilos <- find_thread_urls(
     keywords = "crypto", 
-    subreddit = "technology", # Un foro más técnico y polarizado
-    sort_by = "comments",          # Buscamos debate/peleas, no likes
+    subreddit = "technology", 
+    sort_by = "comments",         
     period = "year"             
   )
   saveRDS(hilos, archivo_datos)
@@ -88,7 +88,7 @@ comentarios <- contenido$comments
 Descarga del contenido detallado de los hilos. Se realiza una limpieza de estructura eliminando usuarios eliminados y bots (`AutoModerator`). Se reconstruye la jerarquía de la conversación mediante la creación de la columna `parent_id` a partir del ID de comentario de forma que si un usuario responde al comentario "1", su id será "1_1"
 
 ```{r}
-#Limpieza de estructura (SNA y Textos)
+#Limpieza de estructura 
 clean_data <- comentarios |>
   filter(author != "[deleted]" & author != "AutoModerator") |> 
   mutate(parent_id = if_else(str_detect(comment_id, "_"),
@@ -124,7 +124,7 @@ data_sna <- clean_data |>
   select(author, comment_id, parent_id) |>
   left_join(clean_data, by = c("parent_id" = "comment_id"), suffix = c("_emisor", "_receptor")) |>
   select(from = author_emisor, to = author_receptor) |>
-  drop_na() |> # se quitan los hilos originales
+  drop_na() |> 
   filter(from != to) # se quitan autorespuestas
 
 
@@ -133,16 +133,17 @@ saveRDS(data_sna, "data/reddit/data_sna.rds")
 
 # Preprocesamiento de texto y lematización
 
-Se realiza un doble flujo de limpieza: - **Optimizado:** Eliminación de URLs y caracteres no alfanuméricos seguido de una lematización para agrupar términos por su raíz semántica.
+Se realiza un doble flujo de limpieza: 
+- **Optimizado:** Eliminación de URLs y caracteres no alfanuméricos seguido de una lematización para agrupar términos por su raíz semántica.
 
 ```{r}
-# Limpieza previa con expresiones regulares para quitar basura de internet
+# Limpieza previa para quitar basura 
 data_texto <- clean_data |>
   mutate(texto_limpio = comment |>
            str_replace_all("http[s]?://\\S+", "") |>        # Quitar URLs
            str_replace_all("[^[:alnum:][:space:]]", "") |>  # Solo alfanumérico
            str_to_lower() |>                                # Minúsculas
-           lemmatize_strings())                             # Lematizar (textstem)
+           lemmatize_strings())                             # Lematizar 
 
 saveRDS(data_texto, "data/reddit/data_texto_procesado.rds")
 ```
@@ -153,19 +154,19 @@ saveRDS(data_texto, "data/reddit/data_texto_procesado.rds")
 # Creamos el Corpus de texto que usa el paquete 'tm'
 corpus <- VCorpus(VectorSource(data_texto$texto_limpio))
 
-# Proceso estándar de limpieza de texto
+# Limpieza de texto
 corpus <- tm_map(corpus, content_transformer(tolower)) # Todo a minúsculas
 corpus <- tm_map(corpus, removePunctuation)            # Fuera signos de puntuación
 corpus <- tm_map(corpus, removeNumbers)                # Fuera números
 
-corpus <- tm_map(corpus, removeWords, stopwords("en")) # quitamos las stopwords inglesas
+corpus <- tm_map(corpus, removeWords, stopwords("en")) # quitamos las stopwords 
 corpus <- tm_map(corpus, stripWhitespace)              # quitamos espacios en blanco extra
 
 # Creamos la Matriz Documento-Término (DTM)
 # Filas = Comentarios, Columnas = Palabras, Celdas = Frecuencia
 dtm <- DocumentTermMatrix(corpus)
 
-# para reducir la dispersidad nos quedamos con las palabras que representen más de un 1% del texto
+# nos quedamos con las palabras que representen más de un 1% del texto
 dtm_reducida <- removeSparseTerms(dtm, 0.99) 
 ```
 
@@ -185,7 +186,6 @@ saveRDS(dtm_lda, "data/reddit/dtm_lda.rds")
 
 ```{r}
 textos_sentimiento <- clean_data |>
-  # Limpieza LIGERA (Para Sentimientos)
   mutate(texto_sentimiento = str_replace_all(comment, "http[s]?://\\S+", ""), # Quitar URLs
          texto_sentimiento = str_replace_all(texto_sentimiento, "\\\\[0-9]{3}", ""), # Quitar basura octal \031
          texto_sentimiento = str_squish(texto_sentimiento)) # Solo quitar espacios extra

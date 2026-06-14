@@ -27,16 +27,14 @@ library(igraph)
 library(ggraph)
 library(tidyverse)
 library(viridis)
-library(scales) # escalado de datos
+library(scales) 
 
 
 # Selector de fuente de datos ("reddit" o "kaggle")
 fuente_activa <- "kaggle" 
 
-# Construcción dinámica de la ruta
 ruta_data_sna <- paste0("data/", fuente_activa, "/data_sna.rds")
-
-# Carga de los datos (mantén el nombre de la variable que ya estuviera usando en el fichero original)
+# Carga de los datos 
 data_sna <- readRDS(ruta_data_sna)
 
 if (fuente_activa == "reddit") {
@@ -73,7 +71,7 @@ grafo_reddit <- as_tbl_graph(data_sna, directed = TRUE) |>
     eigenvector = centrality_eigen()
   )
 
-# Extraer el número de nodos y aristas de forma tidy
+# Extraemos el número de nodos y aristas 
 n_nodos <- grafo_reddit |> activate(nodes) |> as_tibble() |> nrow()
 n_aristas <- grafo_reddit |> activate(edges) |> as_tibble() |> nrow()
 
@@ -88,13 +86,13 @@ Para ello, vemos la distribución de los grado y como estamos trabajando con un 
 
 Este bloque extrae el vector de grado global para evaluar el comportamiento asintótico de la red. Se calcula la media, mediana y rango máximo con el fin de modelar la distribución. Se genera un gráfico de densidad kernel aplicando un escalado logarítmico en el eje de abscisas, técnica computacional requerida para corregir el sesgo impuesto por la estructura de Ley de Potencia típica de las redes sociales digitales.
 ```{r}
-# Extraer los grados del grafo puramente con tidygraph
+# Extraemos los grados del grafo puramente 
 df_grados <- grafo_reddit |>
   activate(nodes) |>
   as_tibble() |>
   select(grado = degree)
 
-# Calcular estadísticos descriptivos
+# Calculamos estadísticos descriptivos
 mediana_grado <- median(df_grados$grado)
 media_grado   <- mean(df_grados$grado)
 
@@ -113,8 +111,8 @@ distribucion_grado <- ggplot(df_grados, aes(x = grado)) +
     caption = "Nota: Eje X en escala logarítmica para visualizar la estructura de Ley de Potencia"
   )
 
-ggsave("images/sna_distribucion_grado.png", plot = distribucion_grado,  dpi = 300, width = 10,     # Le damos más anchura
-       height = 6,     # Lo mantenemos bajito para ese efecto panorámico
+ggsave("images/sna_distribucion_grado.png", plot = distribucion_grado,  dpi = 300, width = 10,     
+       height = 6,     
        units = "in")
 
 print(distribucion_grado)
@@ -127,17 +125,17 @@ Por su parte, plot_graph encapsula el motor de visualización forzada por graved
 #| warning: false
 generate_subgraph_advanced <- function(umbral_nodos, umbral_aristas, g) {
   g |>
-    # 1. Filtrar aristas débiles primero para reducir carga computacional
+    # Filtramos aristas
     activate(edges) |>
     filter(weight >= umbral_aristas) |>
     
-    # 2. Recalcular el grado dinámicamente sobre el grafo resultante
+    # Recalculamos el grado 
     activate(nodes) |>
     mutate(temp_degree = centrality_degree(mode = "all")) |>
     
-    # 3. Filtrar nodos según el umbral de actividad y aislar (grado > 0)
+    # Filtramos nodos según el umbral de actividad y grado > 0
     filter(temp_degree > umbral_nodos & temp_degree > 0) |>
-    filter(!node_is_isolated()) |> # Función nativa de tidygraph
+    filter(!node_is_isolated()) |> 
     
     # Limpiamos variables temporales
     select(-temp_degree)
@@ -150,7 +148,6 @@ plot_graph <- function(seed = 123, grafo){
     geom_edge_link(alpha = 0.1, color = "gray70") +
     geom_node_point(aes(size = degree, color = degree,alpha = 0.8), show.legend = TRUE) +
     
-    # TRUCO ESTRELLA: Rotular dominantes
     geom_node_text(aes(label = ifelse(degree > quantile(degree, 0.75), name, NA)),
                    repel = TRUE, 
                    size = 3,
@@ -200,12 +197,10 @@ Aquí calcula de manera síncrona los indicadores macroscópicos que gobiernan l
 metricas_globales <- data.frame(
   Métrica = c("Densidad", "Reciprocidad", "Transitividad Local (Promedio)", "Distancia Media"),
   Valor = c(
-    # Densidad calculada matemáticamente en grafo dirigido
     with_graph(grafo_limpio, graph_size() / (graph_order() * (graph_order() - 1))),
     
     with_graph(grafo_limpio, graph_reciprocity()),
     
-    # ARREGLO AQUÍ: Forzamos weights = NA para ignorar la fórmula de Barrat
     grafo_limpio |> 
       activate(nodes) |> 
       mutate(t = local_transitivity(weights = NA)) |> 
@@ -243,7 +238,7 @@ grafo_limpio <- grafo_limpio |>
     eigenvector = centrality_eigen()
   )
 
-# Umbral para etiquetas dinámicas (Percentil 90 de Intermediación)
+# Umbral para etiquetas dinámicas
 umbral_puente <- grafo_limpio |> 
   activate(nodes) |> 
   as_tibble() |> 
@@ -293,7 +288,6 @@ plot_comunidades <- function(graph, comunidad_col, titulo, seed = 123) {
     activate(nodes) |>
     mutate(etiqueta_broker = ifelse(betweenness >= umbral_puente, name, NA))
   
-  # ARREGLO AQUÍ: usamos convert() en lugar de morph() para que with_graph reciba un tbl_graph puro
   q_val <- graph |> 
     convert(to_undirected) |> 
     with_graph(graph_modularity(group = as.factor(!!sym(comunidad_col))))
@@ -327,11 +321,9 @@ Este bloque ejecuta en paralelo las tareas de clustering comunitario. En primer 
 ```{r}
 
 grafo_limpio <- grafo_limpio |>
-  # Louvain necesita una estructura no dirigida. Usamos morph para transicionar.
   morph(to_undirected) |>
   mutate(com_louvain = group_louvain(resolution = 2)) |>
   unmorph() |>
-  # Walktrap puede aplicarse directamente en la estructura original
   activate(nodes) |>
   mutate(com_walktrap = group_walktrap())
 
@@ -410,7 +402,6 @@ ggsave("images/sna_walktrap.png", plot = plot_walktrap,  dpi = 300)
 
 Este bloque ejecuta el cálculo de transitividad macroscópica sobre la topología limpia. El coeficiente evalúa la probabilidad empírica de que dos nodos adyacentes a un nodo central compartan una arista entre sí, determinando el nivel de encriptamiento o conectividad interna del grafo.
 ```{r}
-# Medición del nivel de encriptamiento de las comunidades
 transitividad_global <- transitivity(grafo_limpio, type = "global")
 
 cat("Índice de Transitividad Global:", round(transitividad_global, 4), "\n")
@@ -423,7 +414,7 @@ La asortatividad nominal calculada sobre las particiones de Louvain arroja un co
 asort_grado <- grafo_limpio |> 
   with_graph(graph_assortativity(degree, directed = TRUE))
 
-# Asortatividad ideológica por comunidad de Louvain
+# Asortatividad de comunidad de Walktrap
 asort_comun <- grafo_limpio |> 
   with_graph(graph_assortativity(com_walktrap))
 
@@ -435,7 +426,6 @@ cat("Asortatividad de Comunidad:", round(asort_comun, 4), "\n")
 
 Este bloque opera sobre la estructura relacional abstrayendo las centralidades a un plano de lógica condicional jerárquica mediante la directiva case_when. El script clasifica taxonómicamente a la población de la red basándose en umbrales de distribución: aislando a los Brokers o conectores (alta intermediación pero baja popularidad pasiva), Autoridades o centros de referencia (dominio del PageRank), y Hubs o difusores (alto grado de salida / out_degree), segmentándolos del usuario regular de la plataforma.
 ```{r}
-# 2.  (Usando tidygraph)
 tabla_roles <- grafo_limpio |>
   activate(nodes) |>
   mutate(
@@ -461,8 +451,6 @@ saveRDS(tabla_roles, paste0("data/", fuente_activa, "/tabla_roles.rds"))
 
 Este bloque genera el gráfico de dispersión orientado a diagnosticar la morfología de la influencia. Cruza en los ejes cartesianos el Grado (Popularidad) frente a la Intermediación (Control sobre el flujo informativo) de las cuentas previamente catalogadas como élite estructural, mapeando de forma redundante el PageRank de los nodos en la escala geométrica del marcador.
 ```{r}
-
-# Ahora puedes visualizar quiénes están realmente moviendo el debate
 mapa_roles<- ggplot(tabla_roles |> filter(Rol != "Usuario Regular"), 
        aes(x = degree, y = betweenness, color = Rol)) +
   geom_point(aes(size = pagerank), alpha = 0.7) +
@@ -480,7 +468,6 @@ ggsave("images/sna_mapa_roles.png", plot = mapa_roles,  dpi = 300)
 ## Red egocéntrica
 Este bloque identifica de forma automatizada al nodo líder en métricas de intermediación de la red (Top Broker). Utiliza la función nativa make_ego_graph fijando un radio vecinal controlado de primer orden ($K=1$) para extraer su vecindario directo. El subgrafo se transforma al ecosistema tidygraph etiquetando la variable dual Ego-Alter y se proyecta mediante un layout espacial en estrella (layout = 'star'), forzando de manera explícita la centralidad del ego para evaluar la dependencia estructural de su burbuja relacional.
 ```{r}
-# 1. Identificamos automáticamente al usuario más influyente (Top Broker)
 top_broker <- tabla_roles |> 
   filter(Rol == "Broker (Conector)") |> 
   arrange(desc(betweenness)) |> 
@@ -496,11 +483,9 @@ ego_red <- grafo_limpio |>
   convert(to_local_neighborhood, 
           node = which(.N()$name == top_broker), 
           order = 1) |>
-  # Etiquetado en la sub-red
   activate(nodes) |>
   mutate(es_ego = ifelse(name == top_broker, "EGO (Top Broker)", "Contacto (Alter)"))
 
-# Visualización pura con ggraph
 plot_ego_red <- ggraph(ego_red, layout = "star", center = which(.N()$name == top_broker)) +
   geom_edge_link(alpha = 0.4, color = "grey50") +
   geom_node_point(aes(color = es_ego, size = es_ego)) +
@@ -523,7 +508,6 @@ ggsave("images/sna_ego_red.png", plot = plot_ego_red,  dpi = 300)
 
 Este bloque genera el gráfico de dispersión global enfocado a evaluar la tasa de acoplamiento entre la centralidad de Grado (eje X) y la centralidad de Intermediación (eje Y) sobre la población total analizada. Ajusta de forma automática un modelo matemático por regresión lineal por mínimos cuadrados (method = 'lm') con intervalos de confianza sombreados, permitiendo diagnosticar de manera empírica si el control informativo es un subproducto directo del volumen bruto de interacciones o si existen dinámicas de control asimétricas independientes de la popularidad.
 ```{r}
-# 3. Visualización de Dispersión (Popularidad vs Control)
 plot_correlacion_popularidad_control <- ggplot(tabla_roles, aes(x = degree, y = betweenness)) +
   geom_point(aes(size = pagerank, color = closeness), alpha = 0.6) +
   geom_smooth(method = "lm", color = "red", linetype = "dashed") +
