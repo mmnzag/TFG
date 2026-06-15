@@ -58,3 +58,7 @@ Para auditar la limpieza de datos y el desarrollo metodológico paso a paso:
 
 ## Notas Adicionales
 *   Se han excluido de este directorio las carpetas temporales de caché y los archivos compilados de la memoria (`_book/`) para mantener el entorno de desarrollo limpio. La memoria del proyecto se entrega en formato PDF de manera independiente.
+
+*   Debido a las restricciones de tamaño de la plataforma de entrega (límite de 700 MB), el dataset original en bruto (reddit_opinion_ru_ua.csv, que supera 1 GB) no se ha incluido en este archivo comprimido. En su lugar, el proyecto y la aplicación interactiva utilizan directamente los ficheros .rds ya procesados y una muestra representativa (data_sample.rds).
+
+*   En caso de que el tribunal desee ejecutar el script de preprocesamiento desde cero, el fichero CSV original puede encontrarse en el drive https://drive.google.com/drive/folders/1p23BTDEKYKitRurzV6bRHhgvEiQcsLOx?usp=sharing. Una vez descargado, debe ubicarse en la carpeta `data/` del proyecto para que el script lo detecte.
